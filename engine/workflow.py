@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union, ClassVar
 from llama_index.core.workflow import (
     Workflow,
     Context,
@@ -8,9 +8,12 @@ from llama_index.core.workflow import (
     StopEvent,
     step,
     Event,
+    retry_policy
 )
 from llama_index.llms.openai import OpenAI
 from llama_index.llms.ollama import Ollama
+from llama_index.llms.anthropic import Anthropic
+from llama_index.core.llms.llm import LLM
 
 # Configure logging
 logging.basicConfig(
@@ -40,29 +43,44 @@ class NarrativeResponseEvent(Event):
     original_vision: str
     
 class NarrativeWorkflow(Workflow):
-    llm: OpenAI = None
+    _llm: Optional[LLM] = None
+    _config: ClassVar[Dict[str, Any]] = {}
 
     def __init__(self, *args, config: Dict[str, Any] = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.config = config or {}
-        logger.info("Initializing NarrativeWorkflow with config: %s", self.config)
+        NarrativeWorkflow._config = config or {}
+        logger.info("Initializing NarrativeWorkflow with config: %s", self._config)
         
     @classmethod
-    async def initialize_llm(cls):
-        if cls.llm is None:
-            logger.info("Initializing LLM with model: vanilj/gemma-2-ataraxy-9b:Q6_K")
+    async def initialize_llm(cls) -> LLM:
+        """Initialize LLM based on provider and model configuration."""
+        if cls._llm is None:
+            provider = cls._config.get("provider", "ollama")
+            model = cls._config.get("model", "aya-expanse:8b-q6_K")
+            
+            logger.info(f"Initializing LLM with provider: {provider}, model: {model}")
+            
             try:
-                cls.llm = Ollama(model="vanilj/gemma-2-ataraxy-9b:Q6_K", temperature=0.8)
+                if provider == "ollama":
+                    cls._llm = Ollama(model=model, temperature=0.8)
+                elif provider == "openai":
+                    cls._llm = OpenAI(model=model, temperature=0.8)
+                elif provider == "anthropic":
+                    cls._llm = Anthropic(model=model, temperature=0.8)
+                else:
+                    raise ValueError(f"Unsupported provider: {provider}")
+                
                 logger.info("LLM initialization successful")
             except Exception as e:
-                logger.error("Failed to initialize LLM: %s", str(e))
+                logger.error(f"Failed to initialize LLM: {str(e)}")
                 raise
-        return cls.llm
+        
+        return cls._llm
     
-    @step
+    @step(retry_policy=retry_policy.ConstantDelayRetryPolicy(maximum_attempts=3, delay=1))
     async def envision_story(
         self, ctx: Context, ev: StartEvent
-    ) -> PlanningEvent | StopEvent:
+    ) -> Union[PlanningEvent, StopEvent]:
         """
         Sets up story elements that could naturally emerge, with enhanced plot planning
         """
@@ -134,7 +152,7 @@ class NarrativeWorkflow(Workflow):
             logger.error("Error in envision_story: %s", str(e))
             raise
 
-    @step
+    @step(retry_policy=retry_policy.ConstantDelayRetryPolicy(maximum_attempts=3, delay=1))
     async def generate_response(
         self, ctx: Context, ev: UserInputEvent
     ) -> NarrativeResponseEvent:
@@ -200,7 +218,7 @@ class NarrativeWorkflow(Workflow):
     @step
     async def process_input(
         self, ctx: Context, ev: PlanningEvent
-    ) -> UserInputEvent | StopEvent:
+    ) -> Union[UserInputEvent, StopEvent]:
         """
         Processes user input in context of the story
         """
