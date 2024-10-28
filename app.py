@@ -4,6 +4,7 @@ import traceback
 from shiny import App, ui, reactive, render
 from app_utils import load_dotenv
 from adapter.adapter import WorkflowAdapter
+from resource_manager import ResourceManager
 
 # Configure logging
 logging.basicConfig(
@@ -15,6 +16,9 @@ logger = logging.getLogger('narrative_app')
 # Load environment variables
 load_dotenv()
 logger.info("Environment variables loaded")
+
+# Initialize resource manager
+resource_manager = ResourceManager()
 
 # Available models configuration
 AVAILABLE_MODELS = [
@@ -79,9 +83,7 @@ class ChatController:
             await self.chat.clear_messages()
             
             welcome_message = {
-                "content": """Welcome to the Interactive Narrative! 
-                Type your character's actions to see how the story unfolds.
-                Each response will become your new current scene, building the narrative.""",
+                "content": resource_manager.get_text("ui.welcome_message"),
                 "role": "assistant"
             }
             initial_scene = {
@@ -264,6 +266,12 @@ class ChatController:
                 "role": "assistant"
             })
 
+def update_save_list(adapter):
+    """Update the save file choices in the UI"""
+    saves = adapter.list_saves()
+    choices = {save["path"]: save["display"] for save in saves}
+    ui.update_select("save_select", choices=choices)
+
 # Define the UI
 app_ui = ui.page_fillable(
     ui.panel_title("Interactive Narrative Chat"),
@@ -289,42 +297,13 @@ app_ui = ui.page_fillable(
                 id="plot",
                 label="Story World/Plot:",
                 height="100px",
-                value="""The city-state of Kal-shalà stands in the shadow of the ancient Nameless Emperor's throne. Here, magic and technology merge – cybernetic skyscrapers rise beside the Emperor's Palace-Temple, all turning with the Gearwheel of Fate.
-The streets hold both old and new. The Ninnuei artifacts and Rusty Cauldron relics share space with AI programs and augmented citizens. In the hyper-district, holographic ads light the night, while beneath the streets, the Spirit Network carries encrypted data through the city's foundations.
-The ruling Dynasty, descended from the Emperor's Court, governs through a mix of ancient rites and modern methods. Among the citizens walk street urchins who shape the city's destiny, cyborg oracles reading futures in holograms, technomancers coding spells, and scholars piecing together forgotten histories.
-Children play with digital ghosts of ancient beasts while rogue AIs take the forms of old monsters. The bazaars glow under Spirit Lanterns, memory streams hold generations of knowledge, and the old riverfront mirrors it all. In Kal-shalà, past and future blur – a city where digital gods walk alongside ancient ones, and magic flows through circuits as easily as air."""
+                value=resource_manager.get_text("default_content.plot")
             ),
             ui.input_text_area(
                 id="current_scene",
                 label="Current Scene:",
                 height="100px",
-                value="""Tales of Unfathomable Power:
-
-Tale 2: The Kal-Shalà of men
-
-That night, a cold wind blew through the high beams in a forgotten skyscraper in the Old Financial District of the city. Abandoned for years, it had become a hub for lowlifes and a refuge for the destitute. Across the abandoned frame many tiny tents struggled against the cold and the winds. Inside one of them a couple argued, rising the volume of their voices bit by bit. Outside seated a young kid, looking absentmindedly at the distant city lights. There, covered by the blue haze the atmosphere draws on distant things rose the old, titanic, Temple, with all the buildings of the Government and its Protectorate latched to it like remoras or bloodsucking leeches. “Our Emperor,” the kid thought, Nowadays people disesteemed the old Emperor inside the Temple, calling it no more than an old archeological legacy from a distant time. Seldom anyone, even those that still had faith in the Vedanta, thought the ancient, unmoving Emperor was in any way still alive, but not his dad. “Epochs go by,” he had said to him, “cities crumble. The heavens change. But the Emperor remains living.” This had caused him a profound impression. Many years before, when he was still a little child, his father took him to see Him. One could still enter to the Temple at that time. He would forever remember the arid wind that blew through his face, as if conjured from nothing. The city had stopped being a desert many, many million years ago, when the continents were still joined as one, as his teachers had taught to him, and now was a humid place near the immense Ocean. And he remembered the old Emperor seated there, in an incredibly ancient, seemingly fragile throne of bones that seemed to cry, not from pain, but from pure sadness. And the light that shone on His head, holy and eternal. And he would forever remember his face. A face warm and distant, like an old father, looking at him. “Is... is he looking at me Dad?” He said to his father, and his father smiled “Yes, he sees all of Us.”
-
-Dad was part of an increasingly radical group of Ninnuei fundamentalists. They argued these last millennia the pride of Man led to a stagnant society, where wealth and power was concentrated in the hands of the old nobility and the ever-putrid Party, its Protectorate and its Government. Forgetting about the Emperor and its old Visirs, prophets of old had made humanity morally rancid, and life unjust. Mom argued that he just blamed his own failures on external factors. That he did not think how we were poor, and he was weak. That we lived on a tent on the beams of an abandoned building.
-
-In one moment, she said something the kid could not pretend not to hear
-
-“I don’t know why I married you! You are a failure!”
-
-Then silence came. Only the winds and the distant rumour of the city could be heard.
-
-“I’m. I’m so sorry. I didn’t mean it.” Said the woman. Then the rustling of cloth could be heard as a young man with a dirty, unkempt beard and long, curly hair left the tent. The young kid recognized his own absentminded face in the face of his father. “Hi son. I... I’ll be back later, OK?” “Y... yes dad,” and for no reason he thought he needed to ask, “Want me to come with you?” His dad looked at him, confusion in his eyes, and doubted a second. “No, I’ll be fine. Take care of your mother, yes?” “Sure thing, dad.” “Well, bye.” “Bye... dad”
-
-Soon his father disappeared in the shadows of the buildings. A couple of seconds after he was out of sight, his mother left the tent.
-
-“Hey, Ji, have you seen your father?”
-
-The kid looked at her with vacant eyes, and extended a finger.
-
-“He went down, I think.”
-
-“Didn’t he say where he was going?”
-
-He shook his head negatively and ignored his mother, looking instead at the Temple far away. Various blimps, ships and flying constructs flew though the skies, and its distant lights drew lines in the immensity"""
+                value=resource_manager.get_text("default_content.initial_scene")
             ),
             ui.input_numeric(
                 "max_history",
@@ -353,15 +332,7 @@ He shook his head negatively and ignored his mother, looking instead at the Temp
                 )
             ),
             ui.hr(),
-            ui.markdown("""
-            ### How to Use
-            1. Select your preferred model provider and model
-            2. Set your story world and plot
-            3. Click "New Game" to start fresh or "Update Game" to apply changes
-            4. Switch to the Chat tab
-            5. Type your character's actions
-            6. Watch as the story evolves - each response becomes the new current scene
-            """)
+            ui.markdown(resource_manager.get_text("ui.how_to_use"))
         ),
         ui.nav_panel(
             "Chat",
@@ -406,33 +377,17 @@ He shook his head negatively and ignored his mother, looking instead at the Temp
         ui.nav_panel(
             "Story Elements",
             ui.output_text_verbatim("last_plan"),
-            ui.markdown("""
-            ### About Story Elements
-            This tab shows the potential story elements that could naturally emerge 
-            from the current scene. These elements guide the narrative responses 
-            but aren't strictly followed, allowing for natural story development.
-            """)
+            ui.markdown(resource_manager.get_text("ui.about_story_elements"))
         ),
         ui.nav_panel(
             "Scene History",
             ui.output_text_verbatim("scene_history"),
-            ui.markdown("""
-            ### About Scene History
-            This tab shows the chronological progression of scenes that are being 
-            used to inform the narrative responses. Each entry represents a scene 
-            that contributes to the story's continuity.
-            """)
+            ui.markdown(resource_manager.get_text("ui.about_scene_history"))
         ),
         selected="Chat"
     ),
     fillable_mobile=True
 )
-
-def update_save_list(adapter):
-    """Update the save file choices in the UI"""
-    saves = adapter.list_saves()
-    choices = {save["path"]: save["display"] for save in saves}
-    ui.update_select("save_select", choices=choices)
 
 def server(input, output, session):
     logger.info("Server initialization started")
@@ -443,7 +398,7 @@ def server(input, output, session):
     logger.info("Created reactive workflow adapter")
     
     rv = reactive.Value()
-    rv.set("No story elements generated yet. Start chatting to see potential story elements!")
+    rv.set(resource_manager.get_text("ui.no_story_elements"))
     
     scenes_rv = reactive.Value([])
 
@@ -457,9 +412,7 @@ def server(input, output, session):
     
     # Initialize chat with only welcome message
     welcome_message = {
-        "content": """Welcome to the Interactive Narrative! 
-        Type your character's actions to see how the story unfolds.
-        Each response will become your new current scene, building the narrative.""",
+        "content": resource_manager.get_text("ui.welcome_message"),
         "role": "assistant"
     }
     
@@ -520,7 +473,7 @@ def server(input, output, session):
     def scene_history():
         history = scenes_rv.get()
         if not history:
-            return "No previous scenes yet. Start chatting to build the story!"
+            return resource_manager.get_text("ui.no_scene_history")
         
         formatted_history = []
         for i, scene in enumerate(history, 1):
@@ -534,7 +487,7 @@ def server(input, output, session):
         """Display information about the currently selected save."""
         selected_save = input.save_select()
         if not selected_save:
-            return ui.markdown("No save selected")
+            return ui.markdown(resource_manager.get_text("ui.no_save_selected"))
             
         adapter = adapter_rv.get()
         metadata = adapter.metadata_adapter.load_metadata(os.path.join("saves", selected_save))
@@ -549,7 +502,7 @@ def server(input, output, session):
                 ui.panel_well(metadata.latest_summary),
                 ui.markdown(f"*Last Updated: {metadata.timestamp}*")
             )
-        return ui.markdown("No metadata available for this save")
+        return ui.markdown(resource_manager.get_text("ui.no_metadata"))
     
     # Initial save list population
     @reactive.Effect

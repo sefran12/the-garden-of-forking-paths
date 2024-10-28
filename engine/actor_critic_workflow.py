@@ -14,6 +14,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.llms.ollama import Ollama
 from llama_index.llms.anthropic import Anthropic
 from llama_index.core.llms.llm import LLM
+from resource_manager import ResourceManager
 
 # Configure logging
 logging.basicConfig(
@@ -45,6 +46,7 @@ class CriticResponseEvent(Event):
 class ActorCriticWorkflow(Workflow):
     _llm: Optional[LLM] = None
     _config: ClassVar[Dict[str, Any]] = {}
+    _resource_manager: ResourceManager = ResourceManager()
 
     def __init__(self, *args, config: Dict[str, Any] = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -104,41 +106,11 @@ class ActorCriticWorkflow(Workflow):
             
             history_context = "\n".join([f"Scene {i+1}: {scene}" for i, scene in enumerate(scene_history)]) if scene_history else "No previous scenes"
             
-            prompt = f"""
-            Given this story:
-            World: {plot}
-
-            Previous scenes in chronological order:
-            {history_context}
-
-            Current Scene: {current_scene}
-
-            As the Actor, generate a narrative policy that outlines potential story developments.
-            Focus on concrete possibilities and tangible elements.
-            Format your response with clear sections:
-
-            POLICY:
-            1. Active Elements:
-            - List key physical elements currently in play
-            - Note significant character positions and states
-            - Identify active environmental details
-            - Mark any objects or tools of interest
-
-            2. Narrative Tensions:
-            - Highlight immediate conflicts or pressures
-            - List ongoing situations requiring attention
-            - Note any time-sensitive elements
-            - Identify current stakes and risks
-
-            3. Opportunity Space:
-            - List potential immediate developments
-            - Note accessible paths or options
-            - Identify useful resources or advantages
-            - Mark promising connections between elements
-
-            Keep each point specific and tangible.
-            Focus on elements that can drive concrete action.
-            """
+            prompt = self._resource_manager.get_text("workflow.actor_prompt").format(
+                plot=plot,
+                history_context=history_context,
+                current_scene=current_scene
+            )
             
             logger.info("Generating narrative policy")
             response = await llm.acomplete(prompt)
@@ -168,43 +140,12 @@ class ActorCriticWorkflow(Workflow):
             
             history_context = "\n".join([f"Scene {i+1}: {scene}" for i, scene in enumerate(ev.context.scene_history)]) if ev.context.scene_history else "No previous scenes"
             
-            prompt = f"""
-            Story history in chronological order:
-            {history_context}
-
-            Current scene:
-            {ev.context.current_scene}
-
-            Actor's policy:
-            {ev.policy}
-
-            User's action:
-            {ev.user_action}
-
-            As the Critic, evaluate the action's impact on the current state.
-            Focus on concrete changes and developments. Format your response in two clear sections with the given names "Action Analysis" and "Response":
-
-            Action Analysis:
-            - How does this action affect the current elements?
-            - What immediate changes does it cause?
-            - What new possibilities does it create?
-            - Which existing tensions shift or develop?
-            - What new practical situations emerge?
-            - What potential consequences emerge?
-
-            Response:
-            [Write the next scene with clear physical detail:]
-            - Specific sensory information
-            - Concrete actions and reactions
-            - Observable environmental changes
-            - Direct consequences of choices
-            - Clear character movements and states
-            - Precise details that connect to established elements
-            - End on concrete details that suggest future possibilities
-
-            Keep the scene grounded in physical reality.
-            End with a clear, observable development.
-            """
+            prompt = self._resource_manager.get_text("workflow.critic_prompt").format(
+                history_context=history_context,
+                current_scene=ev.context.current_scene,
+                policy=ev.policy,
+                user_action=ev.user_action
+            )
             
             logger.info("Generating critic response")
             response = await llm.acomplete(prompt)
