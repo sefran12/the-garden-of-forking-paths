@@ -120,18 +120,24 @@ class ActorCriticWorkflow(Workflow):
             POLICY:
             1. Active Elements:
             - List key physical elements currently in play
-            - Note important character states and relationships
-            - Identify environmental factors and atmosphere
+            - Note significant character positions and states
+            - Identify active environmental details
+            - Mark any objects or tools of interest
 
             2. Narrative Tensions:
             - Highlight immediate conflicts or pressures
-            - Note building story threads
-            - Identify potential complications
+            - List ongoing situations requiring attention
+            - Note any time-sensitive elements
+            - Identify current stakes and risks
 
             3. Opportunity Space:
-            - List possible directions for development
-            - Note potential consequences of different paths
-            - Identify elements that could gain significance
+            - List potential immediate developments
+            - Note accessible paths or options
+            - Identify useful resources or advantages
+            - Mark promising connections between elements
+
+            Keep each point specific and tangible.
+            Focus on elements that can drive concrete action.
             """
             
             logger.info("Generating narrative policy")
@@ -175,21 +181,29 @@ class ActorCriticWorkflow(Workflow):
             User's action:
             {ev.user_action}
 
-            Evaluate the action and generate a response. Format your response in two clear sections:
+            As the Critic, evaluate the action's impact on the current state.
+            Focus on concrete changes and developments. Format your response in two clear sections with the given names "Action Analysis" and "Response":
 
             Action Analysis:
-            - How does this action interact with the policy?
+            - How does this action affect the current elements?
+            - What immediate changes does it cause?
             - What new possibilities does it create?
-            - What established elements does it build upon?
+            - Which existing tensions shift or develop?
+            - What new practical situations emerge?
             - What potential consequences emerge?
 
             Response:
-            [Write the next scene focusing on:]
-            - Clear, concrete sensory details
-            - Specific physical actions and reactions
+            [Write the next scene with clear physical detail:]
+            - Specific sensory information
+            - Concrete actions and reactions
+            - Observable environmental changes
             - Direct consequences of choices
-            - Observable changes in the environment
+            - Clear character movements and states
+            - Precise details that connect to established elements
             - End on concrete details that suggest future possibilities
+
+            Keep the scene grounded in physical reality.
+            End with a clear, observable development.
             """
             
             logger.info("Generating critic response")

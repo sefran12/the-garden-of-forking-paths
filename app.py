@@ -60,6 +60,210 @@ for model in AVAILABLE_MODELS:
     display_name = f"{model['name']} ({model['size']})" if model['size'] != "N/A" else model['name']
     MODELS_BY_PROVIDER[provider].append((model['name'], display_name))
 
+class ChatController:
+    def __init__(self, input, chat, adapter_rv):
+        self.input = input
+        self.chat = chat
+        self.adapter_rv = adapter_rv
+        
+    def get_model_info(self):
+        return {
+            "provider": self.input.model_provider(),
+            "model": self.input.model_select(),
+            "workflow_type": self.input.workflow_type()
+        }
+            
+    async def new_game(self):
+        try:
+            adapter = self.adapter_rv.get()
+            await self.chat.clear_messages()
+            
+            welcome_message = {
+                "content": """Welcome to the Interactive Narrative! 
+                Type your character's actions to see how the story unfolds.
+                Each response will become your new current scene, building the narrative.""",
+                "role": "assistant"
+            }
+            initial_scene = {
+                "content": self.input.current_scene(),
+                "role": "assistant"
+            }
+            
+            await self.chat.append_message(welcome_message)
+            await self.chat.append_message(initial_scene)
+            
+            adapter.create_initial_state(
+                plot=self.input.plot(),
+                current_scene=self.input.current_scene(),
+                chat_messages=[welcome_message, initial_scene],
+                scene_history=[]
+            )
+            
+            ui.notification_show("New game started successfully", type="message")
+            
+        except Exception as e:
+            error_msg = f"Failed to start new game: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            ui.notification_show(error_msg, type="error")
+            
+    async def update_game(self):
+        try:
+            adapter = self.adapter_rv.get()
+            if not adapter.current_state:
+                ui.notification_show("No active game to update. Please start a new game first.", type="warning")
+                return
+                
+            adapter.current_state.plot = self.input.plot()
+            adapter.current_state.current_scene = self.input.current_scene()
+            
+            ui.notification_show("Game settings updated successfully", type="message")
+            
+        except Exception as e:
+            error_msg = f"Failed to update game: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            ui.notification_show(error_msg, type="error")
+            
+    async def save_state(self):
+        try:
+            adapter = self.adapter_rv.get()
+            messages = [
+                {"content": msg["content"], "role": msg["role"]} 
+                for msg in self.chat.messages()
+            ]
+            adapter.current_state.chat_messages = messages
+            
+            with ui.Progress(min=0, max=3) as p:
+                p.set(value=0, message="Generating story metadata...", 
+                      detail="Creating story name and summaries...")
+                
+                config = self.get_model_info()
+                save_path = await adapter.save_state(workflow_config=config)
+                
+                p.set(value=2, message="Finalizing save...", 
+                      detail="Updating save list...")
+                
+                update_save_list(adapter)
+                
+                p.set(value=3, message="Save complete!")
+            
+            ui.notification_show(f"State saved successfully", type="message")
+            
+        except Exception as e:
+            error_msg = f"Failed to save state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            ui.notification_show(error_msg, type="error")
+            
+    async def load_state(self, scenes_rv, rv):
+        try:
+            adapter = self.adapter_rv.get()
+            selected_save = self.input.save_select()
+            if not selected_save:
+                return
+                
+            state = adapter.load_state(os.path.join("saves", selected_save))
+            
+            ui.update_text_area("plot", value=state.plot)
+            ui.update_text_area("current_scene", value=state.current_scene)
+            scenes_rv.set(state.scene_history)
+            
+            # When loading a game, just load the saved messages without adding an initial scene
+            await self.chat.clear_messages()
+            for msg in state.chat_messages:
+                await self.chat.append_message(msg)
+            
+            if "original_vision" in state.metadata:
+                rv.set(state.metadata["original_vision"])
+                
+            ui.notification_show("State loaded successfully", type="message")
+            
+        except Exception as e:
+            error_msg = f"Failed to load state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            ui.notification_show(error_msg, type="error")
+            
+    async def regenerate_scene(self, scenes_rv, rv):
+        try:
+            adapter = self.adapter_rv.get()
+            messages = [
+                {"content": msg["content"], "role": msg["role"]} 
+                for msg in self.chat.messages()[:-1]
+            ]
+            
+            config = self.get_model_info()
+            state = await adapter.regenerate_current_state(
+                chat_messages=messages,
+                max_scenes=int(self.input.max_history()),
+                workflow_config=config
+            )
+            
+            ui.update_text_area("current_scene", value=state.current_scene)
+            scenes_rv.set(state.scene_history)
+            
+            if "original_vision" in state.metadata:
+                rv.set(state.metadata["original_vision"])
+                
+            await self.chat.clear_messages()
+            for msg in messages:
+                await self.chat.append_message(msg)
+            
+            await self.chat.append_message({
+                "content": state.current_scene,
+                "role": "assistant"
+            })
+            
+            ui.notification_show("Scene regenerated successfully", type="message")
+            
+        except Exception as e:
+            error_msg = f"Failed to regenerate scene: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            await self.chat.append_message({
+                "content": f"Error: {error_msg}",
+                "role": "assistant"
+            })
+            
+    async def handle_user_action(self, scenes_rv, rv):
+        try:
+            adapter = self.adapter_rv.get()
+            user_action = self.chat.user_input()
+            logger.info("Received user action: %s", user_action)
+            
+            current_history = scenes_rv.get()
+            current_history.append(self.input.current_scene())
+            scenes_rv.set(current_history)
+            logger.info("Updated scene history, current length: %d", len(current_history))
+            
+            messages = [
+                {"content": msg["content"], "role": msg["role"]} 
+                for msg in self.chat.messages()
+            ]
+            
+            config = self.get_model_info()
+            
+            state = await adapter.generate_next_state(
+                user_action=user_action,
+                chat_messages=messages,
+                max_scenes=int(self.input.max_history()),
+                workflow_config=config
+            )
+            
+            ui.update_text_area("current_scene", value=state.current_scene)
+            
+            if "original_vision" in state.metadata:
+                rv.set(state.metadata["original_vision"])
+            
+            await self.chat.append_message({
+                "content": state.current_scene,
+                "role": "assistant"
+            })
+                
+        except Exception as e:
+            error_msg = f"Error in chat handler: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            await self.chat.append_message({
+                "content": f"Error: {error_msg}",
+                "role": "assistant"
+            })
+
 # Define the UI
 app_ui = ui.page_fillable(
     ui.panel_title("Interactive Narrative Chat"),
@@ -94,24 +298,69 @@ Children play with digital ghosts of ancient beasts while rogue AIs take the for
                 id="current_scene",
                 label="Current Scene:",
                 height="100px",
-                value="Standing at the entrance of a neon-lit dream parlor"
+                value="""Tales of Unfathomable Power:
+
+Tale 2: The Kal-Shalà of men
+
+That night, a cold wind blew through the high beams in a forgotten skyscraper in the Old Financial District of the city. Abandoned for years, it had become a hub for lowlifes and a refuge for the destitute. Across the abandoned frame many tiny tents struggled against the cold and the winds. Inside one of them a couple argued, rising the volume of their voices bit by bit. Outside seated a young kid, looking absentmindedly at the distant city lights. There, covered by the blue haze the atmosphere draws on distant things rose the old, titanic, Temple, with all the buildings of the Government and its Protectorate latched to it like remoras or bloodsucking leeches. “Our Emperor,” the kid thought, Nowadays people disesteemed the old Emperor inside the Temple, calling it no more than an old archeological legacy from a distant time. Seldom anyone, even those that still had faith in the Vedanta, thought the ancient, unmoving Emperor was in any way still alive, but not his dad. “Epochs go by,” he had said to him, “cities crumble. The heavens change. But the Emperor remains living.” This had caused him a profound impression. Many years before, when he was still a little child, his father took him to see Him. One could still enter to the Temple at that time. He would forever remember the arid wind that blew through his face, as if conjured from nothing. The city had stopped being a desert many, many million years ago, when the continents were still joined as one, as his teachers had taught to him, and now was a humid place near the immense Ocean. And he remembered the old Emperor seated there, in an incredibly ancient, seemingly fragile throne of bones that seemed to cry, not from pain, but from pure sadness. And the light that shone on His head, holy and eternal. And he would forever remember his face. A face warm and distant, like an old father, looking at him. “Is... is he looking at me Dad?” He said to his father, and his father smiled “Yes, he sees all of Us.”
+
+Dad was part of an increasingly radical group of Ninnuei fundamentalists. They argued these last millennia the pride of Man led to a stagnant society, where wealth and power was concentrated in the hands of the old nobility and the ever-putrid Party, its Protectorate and its Government. Forgetting about the Emperor and its old Visirs, prophets of old had made humanity morally rancid, and life unjust. Mom argued that he just blamed his own failures on external factors. That he did not think how we were poor, and he was weak. That we lived on a tent on the beams of an abandoned building.
+
+In one moment, she said something the kid could not pretend not to hear
+
+“I don’t know why I married you! You are a failure!”
+
+Then silence came. Only the winds and the distant rumour of the city could be heard.
+
+“I’m. I’m so sorry. I didn’t mean it.” Said the woman. Then the rustling of cloth could be heard as a young man with a dirty, unkempt beard and long, curly hair left the tent. The young kid recognized his own absentminded face in the face of his father. “Hi son. I... I’ll be back later, OK?” “Y... yes dad,” and for no reason he thought he needed to ask, “Want me to come with you?” His dad looked at him, confusion in his eyes, and doubted a second. “No, I’ll be fine. Take care of your mother, yes?” “Sure thing, dad.” “Well, bye.” “Bye... dad”
+
+Soon his father disappeared in the shadows of the buildings. A couple of seconds after he was out of sight, his mother left the tent.
+
+“Hey, Ji, have you seen your father?”
+
+The kid looked at her with vacant eyes, and extended a finger.
+
+“He went down, I think.”
+
+“Didn’t he say where he was going?”
+
+He shook his head negatively and ignored his mother, looking instead at the Temple far away. Various blimps, ships and flying constructs flew though the skies, and its distant lights drew lines in the immensity"""
             ),
             ui.input_numeric(
                 "max_history",
                 "Maximum Scene Pairs to Remember:",
-                value=5,
+                value=20,
                 min=1,
-                max=20,
+                max=40,
                 step=1,
+            ),
+            ui.row(
+                ui.column(6, 
+                    ui.input_action_button(
+                        "new_game",
+                        "New Game",
+                        width="100%",
+                        class_="btn-primary"
+                    )
+                ),
+                ui.column(6,
+                    ui.input_action_button(
+                        "update_game",
+                        "Update Game",
+                        width="100%",
+                        class_="btn-info"
+                    )
+                )
             ),
             ui.hr(),
             ui.markdown("""
             ### How to Use
             1. Select your preferred model provider and model
             2. Set your story world and plot
-            3. Switch to the Chat tab
-            4. Type your character's actions
-            5. Watch as the story evolves - each response becomes the new current scene
+            3. Click "New Game" to start fresh or "Update Game" to apply changes
+            4. Switch to the Chat tab
+            5. Type your character's actions
+            6. Watch as the story evolves - each response becomes the new current scene
             """)
         ),
         ui.nav_panel(
@@ -179,6 +428,12 @@ Children play with digital ghosts of ancient beasts while rogue AIs take the for
     fillable_mobile=True
 )
 
+def update_save_list(adapter):
+    """Update the save file choices in the UI"""
+    saves = adapter.list_saves()
+    choices = {save["path"]: save["display"] for save in saves}
+    ui.update_select("save_select", choices=choices)
+
 def server(input, output, session):
     logger.info("Server initialization started")
     
@@ -200,54 +455,60 @@ def server(input, output, session):
             choices = MODELS_BY_PROVIDER[provider]
             ui.update_select("model_select", choices=dict(choices))
     
-    # Get selected model info
-    def get_model_info():
-        provider = input.model_provider()
-        model_name = input.model_select()
-        workflow_type = input.workflow_type()
-        return {
-            "provider": provider,
-            "model": model_name,
-            "workflow_type": workflow_type
-        }
-
-    # Initialize chat with welcome message
+    # Initialize chat with only welcome message
     welcome_message = {
         "content": """Welcome to the Interactive Narrative! 
         Type your character's actions to see how the story unfolds.
         Each response will become your new current scene, building the narrative.""",
         "role": "assistant"
     }
-    initial_scene = {
-        "content": "Standing at the entrance of a neon-lit dream parlor",
-        "role": "assistant"
-    }
     
     # Create chat instance with proper error handling
     chat = ui.Chat(
         "chat",
-        messages=[welcome_message, initial_scene],
+        messages=[welcome_message],  # Start with just the welcome message
         on_error="actual"  # Show actual errors for debugging
     )
     
-    # Transform assistant responses to handle markdown
-    @chat.transform_assistant_response
-    def _(response):
-        # Return response as markdown
-        return ui.markdown(response)
+    # Create chat controller
+    controller = ChatController(input, chat, adapter_rv)
     
+    # Initialize story state
     @reactive.Effect
     def _():
-        # Initialize story state if needed
         adapter = adapter_rv.get()
         if not adapter.current_state:
+            # For fresh start, add initial scene
+            initial_scene = {
+                "content": input.current_scene(),
+                "role": "assistant"
+            }
             adapter.create_initial_state(
                 plot=input.plot(),
                 current_scene=input.current_scene(),
                 chat_messages=[welcome_message, initial_scene],
                 scene_history=[]
             )
+            # Add initial scene to chat
+            @reactive.Effect
+            async def _():
+                await chat.append_message(initial_scene)
             logger.info("Initialized story state")
+    
+    # Transform assistant responses to handle markdown
+    @chat.transform_assistant_response
+    def _(response):
+        return ui.markdown(response)
+    
+    @reactive.Effect
+    @reactive.event(input.new_game)
+    async def _():
+        await controller.new_game()
+    
+    @reactive.Effect
+    @reactive.event(input.update_game)
+    async def _():
+        await controller.update_game()
     
     @output
     @render.text
@@ -290,186 +551,29 @@ def server(input, output, session):
             )
         return ui.markdown("No metadata available for this save")
     
-    def update_save_list():
-        """Update the save file choices in the UI"""
-        adapter = adapter_rv.get()
-        saves = adapter.list_saves()
-        choices = {save["path"]: save["display"] for save in saves}
-        ui.update_select("save_select", choices=choices)
-    
     # Initial save list population
     @reactive.Effect
     def _():
-        update_save_list()
+        update_save_list(adapter_rv.get())
     
     @reactive.Effect
     @reactive.event(input.save_state)
     async def _():
-        try:
-            adapter = adapter_rv.get()
-            # Extract just the messages from the chat
-            messages = [
-                {"content": msg["content"], "role": msg["role"]} 
-                for msg in chat.messages()
-            ]
-            # Update current state with latest messages before saving
-            adapter.current_state.chat_messages = messages
-            
-            # Show progress while generating metadata and saving
-            with ui.Progress(min=0, max=3) as p:
-                p.set(value=0, message="Generating story metadata...", 
-                      detail="Creating story name and summaries...")
-                
-                # Get model config for LLM
-                config = get_model_info()
-                
-                # Save state with metadata generation
-                save_path = await adapter.save_state(workflow_config=config)
-                
-                p.set(value=2, message="Finalizing save...", 
-                      detail="Updating save list...")
-                
-                # Update save list immediately after saving
-                update_save_list()
-                
-                p.set(value=3, message="Save complete!")
-            
-            ui.notification_show(f"State saved successfully", type="message")
-            
-        except Exception as e:
-            error_msg = f"Failed to save state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            logger.error(error_msg)
-            ui.notification_show(error_msg, type="error")
+        await controller.save_state()
     
     @reactive.Effect
     @reactive.event(input.load_save)
     async def _():
-        try:
-            adapter = adapter_rv.get()
-            selected_save = input.save_select()
-            if not selected_save:
-                return
-                
-            state = adapter.load_state(os.path.join("saves", selected_save))
-            
-            # Update UI with loaded state
-            ui.update_text_area("plot", value=state.plot)
-            ui.update_text_area("current_scene", value=state.current_scene)
-            scenes_rv.set(state.scene_history)
-            
-            # Clear existing messages and load saved ones
-            await chat.clear_messages()
-            for msg in state.chat_messages:
-                await chat.append_message(msg)
-            
-            if "original_vision" in state.metadata:
-                rv.set(state.metadata["original_vision"])
-                
-            ui.notification_show("State loaded successfully", type="message")
-            
-        except Exception as e:
-            error_msg = f"Failed to load state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            logger.error(error_msg)
-            ui.notification_show(error_msg, type="error")
+        await controller.load_state(scenes_rv, rv)
     
     @reactive.Effect
     @reactive.event(input.regenerate)
     async def _():
-        try:
-            adapter = adapter_rv.get()
-            # Get current messages and remove the last assistant message
-            messages = [
-                {"content": msg["content"], "role": msg["role"]} 
-                for msg in chat.messages()[:-1]  # Exclude last message
-            ]
-            
-            # Pass selected model in workflow config
-            config = get_model_info()
-            state = await adapter.regenerate_current_state(
-                chat_messages=messages,
-                max_scenes=int(input.max_history()),
-                workflow_config=config
-            )
-            
-            # Update UI with regenerated state
-            ui.update_text_area("current_scene", value=state.current_scene)
-            scenes_rv.set(state.scene_history)
-            
-            if "original_vision" in state.metadata:
-                rv.set(state.metadata["original_vision"])
-                
-            # Clear existing messages and reload them without the last one
-            await chat.clear_messages()
-            for msg in messages:
-                await chat.append_message(msg)
-            
-            # Append the regenerated response
-            await chat.append_message({
-                "content": state.current_scene,
-                "role": "assistant"
-            })
-            
-            ui.notification_show("Scene regenerated successfully", type="message")
-            
-        except Exception as e:
-            error_msg = f"Failed to regenerate scene: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            logger.error(error_msg)
-            await chat.append_message({
-                "content": f"Error: {error_msg}",
-                "role": "assistant"
-            })
+        await controller.regenerate_scene(scenes_rv, rv)
     
     @chat.on_user_submit
     async def _():
-        try:
-            adapter = adapter_rv.get()
-            
-            # Get the user's action from chat
-            user_action = chat.user_input()
-            logger.info("Received user action: %s", user_action)
-            
-            # Add current scene to history before generating new one
-            current_history = scenes_rv.get()
-            current_history.append(input.current_scene())
-            scenes_rv.set(current_history)
-            logger.info("Updated scene history, current length: %d", len(current_history))
-            
-            # Extract just the messages from the chat
-            messages = [
-                {"content": msg["content"], "role": msg["role"]} 
-                for msg in chat.messages()
-            ]
-            
-            # Pass selected model in workflow config
-            config = get_model_info()
-            
-            # Generate next state using adapter
-            state = await adapter.generate_next_state(
-                user_action=user_action,
-                chat_messages=messages,
-                max_scenes=int(input.max_history()),
-                workflow_config=config
-            )
-            
-            # Update UI with new state
-            ui.update_text_area("current_scene", value=state.current_scene)
-            
-            if "original_vision" in state.metadata:
-                rv.set(state.metadata["original_vision"])
-            
-            # Append assistant response
-            await chat.append_message({
-                "content": state.current_scene,
-                "role": "assistant"
-            })
-                
-        except Exception as e:
-            error_msg = f"Error in chat handler: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            logger.error(error_msg)
-            await chat.append_message({
-                "content": f"Error: {error_msg}",
-                "role": "assistant"
-            })
+        await controller.handle_user_action(scenes_rv, rv)
 
 # Create and return the app
 logger.info("Creating Shiny app")
