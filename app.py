@@ -45,6 +45,12 @@ AVAILABLE_MODELS = [
     {"name": "claude-3-haiku-20240307", "provider": "anthropic", "size": "N/A"}
 ]
 
+# Available workflow types
+WORKFLOW_TYPES = [
+    ("plan-adapt", "Plan & Adapt - Classic planning with adaptation"),
+    ("actor-critic", "Actor-Critic - Policy-based narrative generation")
+]
+
 # Group models by provider for UI
 MODELS_BY_PROVIDER = {}
 for model in AVAILABLE_MODELS:
@@ -61,6 +67,11 @@ app_ui = ui.page_fillable(
         ui.nav_panel(
             "Story Settings",
             ui.input_select(
+                "workflow_type",
+                "Select Narrative Engine:",
+                choices=dict(WORKFLOW_TYPES)
+            ),
+            ui.input_select(
                 "model_provider",
                 "Select Provider:",
                 choices=list(MODELS_BY_PROVIDER.keys())
@@ -71,19 +82,19 @@ app_ui = ui.page_fillable(
                 choices=[]  # Will be populated based on provider selection
             ),
             ui.input_text_area(
-                "plot",
-                "Story World/Plot:",
+                id="plot",
+                label="Story World/Plot:",
+                height="100px",
                 value="""The city-state of Kal-shalà stands in the shadow of the ancient Nameless Emperor's throne. Here, magic and technology merge – cybernetic skyscrapers rise beside the Emperor's Palace-Temple, all turning with the Gearwheel of Fate.
 The streets hold both old and new. The Ninnuei artifacts and Rusty Cauldron relics share space with AI programs and augmented citizens. In the hyper-district, holographic ads light the night, while beneath the streets, the Spirit Network carries encrypted data through the city's foundations.
 The ruling Dynasty, descended from the Emperor's Court, governs through a mix of ancient rites and modern methods. Among the citizens walk street urchins who shape the city's destiny, cyborg oracles reading futures in holograms, technomancers coding spells, and scholars piecing together forgotten histories.
-Children play with digital ghosts of ancient beasts while rogue AIs take the forms of old monsters. The bazaars glow under Spirit Lanterns, memory streams hold generations of knowledge, and the old riverfront mirrors it all. In Kal-shalà, past and future blur – a city where digital gods walk alongside ancient ones, and magic flows through circuits as easily as air.""",
-                height="100px"
+Children play with digital ghosts of ancient beasts while rogue AIs take the forms of old monsters. The bazaars glow under Spirit Lanterns, memory streams hold generations of knowledge, and the old riverfront mirrors it all. In Kal-shalà, past and future blur – a city where digital gods walk alongside ancient ones, and magic flows through circuits as easily as air."""
             ),
             ui.input_text_area(
-                "current_scene",
-                "Current Scene:",
-                value="Standing at the entrance of a neon-lit dream parlor",
-                height="100px"
+                id="current_scene",
+                label="Current Scene:",
+                height="100px",
+                value="Standing at the entrance of a neon-lit dream parlor"
             ),
             ui.input_numeric(
                 "max_history",
@@ -107,23 +118,38 @@ Children play with digital ghosts of ancient beasts while rogue AIs take the for
             "Chat",
             ui.layout_sidebar(
                 ui.sidebar(
-                    ui.input_select(
-                        "save_select",
-                        "Load Previous Save:",
-                        choices=[]
+                    ui.card(
+                        ui.card_header("Save Management"),
+                        ui.input_action_button(
+                            "save_state",
+                            "Save Current State",
+                            width="100%",
+                            class_="btn-primary mb-3"
+                        ),
+                        ui.input_select(
+                            "save_select",
+                            "Available Saves:",
+                            choices=[],
+                            width="100%"
+                        ),
+                        ui.input_action_button(
+                            "load_save",
+                            "Load Selected Save",
+                            width="100%",
+                            class_="btn-success mb-3"
+                        ),
+                        ui.input_action_button(
+                            "regenerate",
+                            "Regenerate Current Scene",
+                            width="100%",
+                            class_="btn-warning"
+                        )
                     ),
-                    ui.input_action_button(
-                        "load_save",
-                        "Load Selected Save"
+                    ui.card(
+                        ui.card_header("Save Information"),
+                        ui.output_ui("save_info", fill=True)
                     ),
-                    ui.input_action_button(
-                        "save_state",
-                        "Save Current State"
-                    ),
-                    ui.input_action_button(
-                        "regenerate",
-                        "Regenerate Current Scene"
-                    )
+                    width=400
                 ),
                 ui.chat_ui("chat", placeholder="Enter your character's action...")
             )
@@ -178,11 +204,13 @@ def server(input, output, session):
     def get_model_info():
         provider = input.model_provider()
         model_name = input.model_select()
+        workflow_type = input.workflow_type()
         return {
             "provider": provider,
-            "model": model_name
+            "model": model_name,
+            "workflow_type": workflow_type
         }
-    
+
     # Initialize chat with welcome message
     welcome_message = {
         "content": """Welcome to the Interactive Narrative! 
@@ -239,11 +267,35 @@ def server(input, output, session):
         
         return "\n".join(formatted_history)
     
+    @output
+    @render.ui
+    def save_info():
+        """Display information about the currently selected save."""
+        selected_save = input.save_select()
+        if not selected_save:
+            return ui.markdown("No save selected")
+            
+        adapter = adapter_rv.get()
+        metadata = adapter.metadata_adapter.load_metadata(os.path.join("saves", selected_save))
+        
+        if metadata:
+            return ui.TagList(
+                ui.markdown(f"### {metadata.story_name}"),
+                ui.hr(),
+                ui.markdown("#### Overall Summary"),
+                ui.panel_well(metadata.overall_summary),
+                ui.markdown("#### Latest Events"),
+                ui.panel_well(metadata.latest_summary),
+                ui.markdown(f"*Last Updated: {metadata.timestamp}*")
+            )
+        return ui.markdown("No metadata available for this save")
+    
     def update_save_list():
         """Update the save file choices in the UI"""
         adapter = adapter_rv.get()
         saves = adapter.list_saves()
-        ui.update_select("save_select", choices=saves)
+        choices = {save["path"]: save["display"] for save in saves}
+        ui.update_select("save_select", choices=choices)
     
     # Initial save list population
     @reactive.Effect
@@ -252,7 +304,7 @@ def server(input, output, session):
     
     @reactive.Effect
     @reactive.event(input.save_state)
-    def _():
+    async def _():
         try:
             adapter = adapter_rv.get()
             # Extract just the messages from the chat
@@ -262,10 +314,28 @@ def server(input, output, session):
             ]
             # Update current state with latest messages before saving
             adapter.current_state.chat_messages = messages
-            save_path = adapter.save_state()
-            # Update save list immediately after saving
-            update_save_list()
-            ui.notification_show(f"State saved to {save_path}", type="message")
+            
+            # Show progress while generating metadata and saving
+            with ui.Progress(min=0, max=3) as p:
+                p.set(value=0, message="Generating story metadata...", 
+                      detail="Creating story name and summaries...")
+                
+                # Get model config for LLM
+                config = get_model_info()
+                
+                # Save state with metadata generation
+                save_path = await adapter.save_state(workflow_config=config)
+                
+                p.set(value=2, message="Finalizing save...", 
+                      detail="Updating save list...")
+                
+                # Update save list immediately after saving
+                update_save_list()
+                
+                p.set(value=3, message="Save complete!")
+            
+            ui.notification_show(f"State saved successfully", type="message")
+            
         except Exception as e:
             error_msg = f"Failed to save state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             logger.error(error_msg)

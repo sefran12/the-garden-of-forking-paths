@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict, field
 import logging
-from engine.workflow import NarrativeWorkflow
+from engine.plan_adapt_workflow import NarrativeWorkflow
+from engine.actor_critic_workflow import ActorCriticWorkflow
+from .save_metadata_adapter import SaveMetadataAdapter, SaveMetadata
 
 logger = logging.getLogger('workflow_adapter')
 
@@ -57,6 +59,11 @@ class StoryState:
         return True
 
 class WorkflowAdapter:
+    WORKFLOW_TYPES = {
+        "plan-adapt": NarrativeWorkflow,
+        "actor-critic": ActorCriticWorkflow
+    }
+
     def __init__(self, save_dir: str = "saves"):
         self.save_dir = save_dir
         if not os.path.exists(save_dir):
@@ -64,7 +71,13 @@ class WorkflowAdapter:
         
         self.current_state: Optional[StoryState] = None
         self.current_save_path: Optional[str] = None
+        self.metadata_adapter = SaveMetadataAdapter(save_dir)
         logger.info("WorkflowAdapter initialized with save directory: %s", save_dir)
+
+    def _get_workflow_class(self, config: Dict[str, Any]) -> Any:
+        """Get the appropriate workflow class based on config."""
+        workflow_type = config.get("workflow_type", "plan-adapt")
+        return self.WORKFLOW_TYPES.get(workflow_type, NarrativeWorkflow)
 
     def _generate_save_path(self) -> str:
         """Generate a unique save file path with timestamp."""
@@ -96,7 +109,7 @@ class WorkflowAdapter:
         actions, scenes = zip(*pairs) if pairs else ([], [])
         return list(actions), list(scenes)
 
-    def save_state(self, state: Optional[StoryState] = None) -> str:
+    async def save_state(self, state: Optional[StoryState] = None, workflow_config: Optional[Dict[str, Any]] = None) -> str:
         """
         Save the current or provided story state to disk.
         If the state is a continuation of the current save, it will overwrite it.
@@ -107,6 +120,13 @@ class WorkflowAdapter:
             raise ValueError("No state to save")
 
         try:
+            # Generate metadata using LLM
+            save_metadata = await self.metadata_adapter.generate_metadata(
+                plot=state.plot,
+                chat_messages=state.chat_messages,
+                workflow_config=workflow_config
+            )
+
             # Determine if this is a continuation of current save
             is_continuation = False
             if self.current_save_path and os.path.exists(self.current_save_path):
@@ -126,6 +146,9 @@ class WorkflowAdapter:
             
             with open(save_path, 'w') as f:
                 json.dump(state_dict, f, indent=2)
+
+            # Save metadata
+            self.metadata_adapter.save_metadata(save_path, save_metadata)
                 
             # Update current save path
             self.current_save_path = save_path
@@ -152,13 +175,26 @@ class WorkflowAdapter:
             logger.error("Failed to load state: %s", str(e))
             raise
 
-    def list_saves(self) -> List[str]:
-        """List all available save files."""
+    def list_saves(self) -> List[Dict[str, str]]:
+        """List all available save files with their metadata."""
         try:
-            saves = [f for f in os.listdir(self.save_dir) 
-                    if f.startswith("story_state_") and f.endswith(".json")]
-            saves.sort(reverse=True)  # Most recent first
-            return saves
+            saves = []
+            for f in os.listdir(self.save_dir):
+                # Skip metadata files and only process main save files
+                if f.startswith("story_state_") and f.endswith(".json") and not f.endswith("_metadata.json"):
+                    save_path = os.path.join(self.save_dir, f)
+                    display_text = self.metadata_adapter.format_save_display(save_path)
+                    # Extract timestamp from filename for sorting
+                    timestamp = f.replace("story_state_", "").replace(".json", "")
+                    saves.append({
+                        "path": f,
+                        "display": display_text,
+                        "timestamp": timestamp
+                    })
+            # Sort by timestamp
+            saves.sort(key=lambda x: x["timestamp"], reverse=True)  # Most recent first
+            # Return only the path and display fields
+            return [{"path": save["path"], "display": save["display"]} for save in saves]
         except Exception as e:
             logger.error("Failed to list saves: %s", str(e))
             raise
@@ -179,7 +215,8 @@ class WorkflowAdapter:
 
         try:
             # Create workflow instance with provided config
-            workflow = NarrativeWorkflow(
+            WorkflowClass = self._get_workflow_class(workflow_config or {})
+            workflow = WorkflowClass(
                 config=workflow_config or {},
                 timeout=timeout
             )
@@ -255,7 +292,8 @@ class WorkflowAdapter:
                 narrative_context.extend([action, scene])
 
             # Create new workflow instance with provided config
-            workflow = NarrativeWorkflow(
+            WorkflowClass = self._get_workflow_class(workflow_config or {})
+            workflow = WorkflowClass(
                 config=workflow_config or {},
                 timeout=timeout
             )
