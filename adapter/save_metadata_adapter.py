@@ -36,8 +36,8 @@ class SaveMetadataAdapter:
     async def _initialize_llm(self, config: Dict[str, Any]) -> LLM:
         """Initialize LLM based on provider and model configuration."""
         if self._llm is None:
-            provider = config.get("provider", "ollama")
-            model = config.get("model", "aya-expanse:8b-q6_K")
+            provider = config.get("provider", "openai")
+            model = config.get("model", "gpt-4o-mini")
             
             logger.info(f"Initializing LLM with provider: {provider}, model: {model}")
             
@@ -77,42 +77,58 @@ class SaveMetadataAdapter:
 
             # Generate story name
             name_prompt = f"""
-            Given this interactive story:
-            World: {plot}
+            Based on this story:
+            Setting: {plot}
 
-            Recent scenes:
+            Recent events:
             {self._format_scenes(scene_pairs[-5:] if len(scene_pairs) > 5 else scene_pairs)}
 
-            Generate a creative and engaging name for this story (max 50 characters).
-            The name should capture the essence of the story and its unique elements.
-            Respond with ONLY the story name, nothing else.
+            Create a clear, descriptive title (max 50 characters) that captures the main elements of the story.
+            Focus on concrete details like location, characters, or central conflict.
+            Start directly with the title - do not include any introductory phrases.
             """
             
             story_name = (await llm.acomplete(name_prompt)).text.strip()
 
             # Generate overall summary
             overall_prompt = f"""
-            Given this interactive story:
-            World: {plot}
+            Summarize this story:
+            Setting: {plot}
 
-            All scenes in chronological order:
+            Events in order:
             {self._format_scenes(scene_pairs[:10])}  # Limit to first 10 scenes
 
-            Write a 200-word summary of the overall story so far.
-            Focus on key events, character development, and emerging themes.
-            Keep it engaging but concise.
+            Write a 200-word factual summary focusing on:
+            - Who are the main characters and what are their roles
+            - Where does the story take place (specific locations)
+            - What key events have happened
+            - What is the current situation
+
+            Important instructions:
+            - Start directly with the summary - do not include phrases like "Here's a summary" or "The story is about"
+            - Keep the summary focused on concrete events and facts
+            - Avoid philosophical interpretations or thematic analysis
+            - Write in present tense
             """
             
             overall_summary = (await llm.acomplete(overall_prompt)).text.strip()
 
             # Generate latest summary
             latest_prompt = f"""
-            Given these most recent scenes from an interactive story:
+            Summarize these recent events:
             {self._format_scenes(scene_pairs[-3:] if len(scene_pairs) > 3 else scene_pairs)}
 
-            Write a 100-word summary of just these latest scenes.
-            Focus on the most recent events and their immediate implications.
-            Keep it concrete and specific.
+            Write a 100-word factual summary that covers:
+            - What specifically happened in these scenes
+            - Who was involved
+            - Where these events took place
+            - What is the immediate situation now
+
+            Important instructions:
+            - Start directly with the events - do not include phrases like "In these scenes" or "These events show"
+            - Focus only on describing the actual events and current state
+            - Avoid speculation about implications or deeper meaning
+            - Write in present tense
             """
             
             latest_summary = (await llm.acomplete(latest_prompt)).text.strip()
