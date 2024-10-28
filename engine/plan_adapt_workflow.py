@@ -14,6 +14,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.llms.ollama import Ollama
 from llama_index.llms.anthropic import Anthropic
 from llama_index.core.llms.llm import LLM
+from resource_manager import ResourceManager
 
 # Configure logging
 logging.basicConfig(
@@ -45,6 +46,7 @@ class NarrativeResponseEvent(Event):
 class NarrativeWorkflow(Workflow):
     _llm: Optional[LLM] = None
     _config: ClassVar[Dict[str, Any]] = {}
+    _resource_manager: ResourceManager = ResourceManager()
 
     def __init__(self, *args, config: Dict[str, Any] = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -104,39 +106,11 @@ class NarrativeWorkflow(Workflow):
             
             history_context = "\n".join([f"Scene {i+1}: {scene}" for i, scene in enumerate(scene_history)]) if scene_history else "No previous scenes"
             
-            prompt = f"""
-            Given this story:
-            World: {plot}
-
-            Previous scenes in chronological order:
-            {history_context}
-
-            Current Scene: {current_scene}
-
-            Analyze the story elements and potential developments:
-
-            1. Immediate Scene Elements:
-            - [2-3 key physical elements present]
-            - [1-2 environmental details that could become significant]
-            - [1-2 character states or tensions]
-
-            2. Active Plot Threads:
-            - [2-3 ongoing situations or conflicts from previous scenes]
-            - [Their current state of development]
-            - [Potential ways they could evolve]
-
-            3. Future Developments (Short-term):
-            - [2-3 immediate possibilities based on current scene]
-            - [Potential consequences of these developments]
-
-            4. Future Developments (Long-term):
-            - [2-3 potential major plot developments]
-            - [How current elements could lead to these developments]
-
-            Keep elements concrete and connected to established story elements. 
-            Focus on building a coherent narrative that flows from past events 
-            while setting up future possibilities.
-            """
+            prompt = self._resource_manager.get_text("workflow.planner_prompt").format(
+                plot=plot,
+                history_context=history_context,
+                current_scene=current_scene
+            )
             
             logger.info("Generating narrative vision")
             response = await llm.acomplete(prompt)
@@ -166,42 +140,12 @@ class NarrativeWorkflow(Workflow):
             
             history_context = "\n".join([f"Scene {i+1}: {scene}" for i, scene in enumerate(ev.context.scene_history)]) if ev.context.scene_history else "No previous scenes"
             
-            prompt = f"""
-            Story history in chronological order:
-            {history_context}
-
-            Current scene:
-            {ev.context.current_scene}
-
-            Story elements and potential developments:
-            {ev.narrative_vision}
-
-            The character's action:
-            {ev.user_action}
-
-            Write what happens next. Focus on:
-    1. Clear, concrete sensory details (what is seen, heard, felt)
-    2. Specific physical actions and reactions
-    3. Direct consequences of the character's choices
-    4. Observable changes in the environment or other characters
-    5. A specific detail or event that suggests what might happen next
-
-    Important guidelines:
-    - Stay grounded in physical reality - avoid metaphors and philosophical musings
-    - End on concrete action or observation, not interpretation
-    - Show events through direct observation, not narrative commentary
-    - Avoid explaining the meaning or significance of events
-    - Keep descriptions precise and literal, not flowery or metaphorical
-    - No meta-commentary about the nature of reality or deeper meanings
-
-    Example of good ending:
-    "The metal door closed behind them with a hollow clang. Down the dim corridor, a faint blue light flickered."
-
-    Example of bad ending:
-    "The door seemed to swallow them into its depths, as if the very fabric of reality was shifting. Perhaps the corridor held more than just darkness - it might contain the very essence of their journey."
-
-    Write a clear, direct scene focusing on what actually happens.
-            """
+            prompt = self._resource_manager.get_text("workflow.adapter_prompt").format(
+                history_context=history_context,
+                current_scene=ev.context.current_scene,
+                narrative_vision=ev.narrative_vision,
+                user_action=ev.user_action
+            )
             
             logger.info("Generating narrative response")
             response = await llm.acomplete(prompt)

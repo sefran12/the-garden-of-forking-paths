@@ -17,8 +17,9 @@ logger = logging.getLogger('narrative_app')
 load_dotenv()
 logger.info("Environment variables loaded")
 
-# Initialize resource manager
+# Get the singleton instance of ResourceManager (already initialized in run.py)
 resource_manager = ResourceManager()
+logger.info(f"Using language: {resource_manager.get_current_language()}")
 
 # Available models configuration
 AVAILABLE_MODELS = [
@@ -274,7 +275,7 @@ def update_save_list(adapter):
 
 # Define the UI
 app_ui = ui.page_fillable(
-    ui.panel_title("Interactive Narrative Chat"),
+    ui.panel_title(f"Interactive Narrative Chat - {resource_manager.get_current_language().upper()}"),
     ui.navset_tab(
         ui.nav_panel(
             "Story Settings",
@@ -528,7 +529,9 @@ def server(input, output, session):
     async def _():
         await controller.handle_user_action(scenes_rv, rv)
 
-# Create and return the app
-logger.info("Creating Shiny app")
+# Create the app
 app = App(app_ui, server)
-logger.info("App creation complete")
+
+# Only run the app if this file is run directly
+if __name__ == "__main__":
+    app.run()

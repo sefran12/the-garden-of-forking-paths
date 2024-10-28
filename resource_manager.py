@@ -10,11 +10,13 @@ class ResourceManager:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ResourceManager, cls).__new__(cls)
+            # Load resources when creating the singleton instance
+            cls._instance.load_resources()
         return cls._instance
     
     def __init__(self):
-        if not self._resources:
-            self.load_resources()
+        # Initialize is called after __new__, but we've already loaded resources
+        pass
     
     def load_resources(self, language: str = "en") -> None:
         """Load resources from the JSON file."""

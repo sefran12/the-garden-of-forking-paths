@@ -1,42 +1,52 @@
 # The Garden of Forking Paths
 
-An interactive narrative application using various language models.
+An interactive narrative experience powered by AI.
 
-## Environment Setup
+## Running the Application
 
-1. Copy the environment template:
+You can run the application with different language settings using the following command:
+
 ```bash
-cp .env.example .env
+python run.py --lang [language_code]
 ```
 
-2. Edit `.env` and add your API keys:
-- `OPENAI_API_KEY`: Your OpenAI API key
-- `ANTHROPIC_API_KEY`: Your Anthropic API key
-- `OLLAMA_HOST`: URL for Ollama if using local models
+Available language codes:
+- `en` - English (default)
+- `it` - Italian
 
-## Docker Setup
+Additional options:
+- `--host` - Host to run the server on (default: 127.0.0.1)
+- `--port` - Port to run the server on (default: 8000)
 
-1. Build the container:
+Examples:
 ```bash
-docker-compose build
+# Run with English (default)
+python run.py
+
+# Run with Italian
+python run.py --lang it
+
+# Run on a specific host and port
+python run.py --lang en --host 0.0.0.0 --port 8080
 ```
 
-2. Run the application:
-```bash
-docker-compose up
-```
+## Project Structure
 
-The application will be available at http://localhost:8000
+- `app.py` - Main Shiny application
+- `run.py` - Application launcher with language selection
+- `resource_manager.py` - Manages text resources and translations
+- `resources.json` - Contains all text content in different languages
+- `engine/` - Core narrative generation logic
+- `adapter/` - Interface adapters for the narrative engine
+- `saves/` - Directory for saved game states
 
 ## Development
 
-For local development without Docker:
+To add support for a new language:
+1. Add the language content to `resources.json` using the appropriate language code
+2. Ensure all text resources are properly translated
+3. The new language will automatically be available through the `--lang` parameter
 
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+## Requirements
 
-2. Run the application:
-```bash
-shiny run
+See `requirements.txt` for Python dependencies.

@@ -126,6 +126,43 @@ class ActorCriticWorkflow(Workflow):
             logger.error("Error in actor_step: %s", str(e))
             raise
 
+    def _parse_critic_response(self, full_response: str) -> tuple[str, str]:
+        """
+        Parse the critic's response more robustly to handle various formats.
+        Returns (analysis_section, response_section)
+        """
+        try:
+            # First try the ideal case with exact markers
+            if "Action Analysis:" in full_response and "Response:" in full_response:
+                parts = full_response.split("Response:", 1)
+                analysis = parts[0].replace("Action Analysis:", "", 1).strip()
+                response = parts[1].strip()
+                return analysis, response
+            
+            # If we can't find both markers, look for alternative patterns
+            if "Analysis:" in full_response and "Response:" in full_response:
+                parts = full_response.split("Response:", 1)
+                analysis = parts[0].replace("Analysis:", "", 1).strip()
+                response = parts[1].strip()
+                return analysis, response
+            
+            # If we still can't parse it properly, make a best effort split
+            # Look for any common section markers
+            markers = ["Response:", "Scene:", "Next Scene:", "What happens next:"]
+            for marker in markers:
+                if marker in full_response:
+                    parts = full_response.split(marker, 1)
+                    return parts[0].strip(), parts[1].strip()
+            
+            # If we can't find any markers, assume everything is the response
+            logger.warning("Could not find section markers in critic response, using full text as response")
+            return "", full_response.strip()
+            
+        except Exception as e:
+            logger.error(f"Error parsing critic response: {str(e)}")
+            # Return the full text as response in case of any parsing error
+            return "", full_response.strip()
+
     @step(retry_policy=retry_policy.ConstantDelayRetryPolicy(maximum_attempts=3, delay=1))
     async def critic_step(
         self, ctx: Context, ev: UserActionEvent
@@ -151,15 +188,8 @@ class ActorCriticWorkflow(Workflow):
             response = await llm.acomplete(prompt)
             logger.info("Successfully generated critic response")
             
-            # Extract sections
-            full_response = response.text
-            try:
-                analysis_section = full_response.split("Response:")[0].replace("Action Analysis:", "").strip()
-                response_section = full_response.split("Response:")[1].strip()
-            except IndexError:
-                logger.warning("Could not split response, using full text")
-                analysis_section = "Analysis parsing failed"
-                response_section = full_response
+            # Extract sections using more robust parsing
+            analysis_section, response_section = self._parse_critic_response(response.text)
             
             # Combine Actor's policy and Critic's analysis for original_vision
             combined_vision = f"""ACTOR:
