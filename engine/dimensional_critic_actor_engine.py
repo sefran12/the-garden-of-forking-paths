@@ -206,7 +206,7 @@ class DimensionalCriticActorWorkflow(Workflow):
         Returns the final narrative with original analysis
         """
         return StopEvent(result={
-            "original_analysis": ev.original_analysis,
+            "original_vision": ev.original_analysis,  # Changed from original_analysis to original_vision
             "narrative": ev.narrative
         })
 
