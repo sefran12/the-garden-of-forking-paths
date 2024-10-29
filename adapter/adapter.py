@@ -6,6 +6,9 @@ from dataclasses import dataclass, asdict, field
 import logging
 from engine.plan_adapt_workflow import NarrativeWorkflow
 from engine.actor_critic_workflow import ActorCriticWorkflow
+from engine.dimensional_critic_actor_engine import DimensionalCriticActorWorkflow
+from engine.selective_critic_actor_engine import SelectiveCriticActorWorkflow
+from engine.optimizing_critic_actor_engine import OptimizingCriticActorWorkflow
 from .save_metadata_adapter import SaveMetadataAdapter, SaveMetadata
 
 logger = logging.getLogger('workflow_adapter')
@@ -61,7 +64,10 @@ class StoryState:
 class WorkflowAdapter:
     WORKFLOW_TYPES = {
         "plan-adapt": NarrativeWorkflow,
-        "actor-critic": ActorCriticWorkflow
+        "actor-critic": ActorCriticWorkflow,
+        "dimensional-critic": DimensionalCriticActorWorkflow,
+        "selective-critic": SelectiveCriticActorWorkflow,
+        "optimizing-critic": OptimizingCriticActorWorkflow
     }
 
     def __init__(self, save_dir: str = "saves"):

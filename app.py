@@ -48,7 +48,10 @@ AVAILABLE_MODELS = [
 # Available workflow types
 WORKFLOW_TYPES = [
     ("plan-adapt", "Plan & Adapt - Classic planning with adaptation"),
-    ("actor-critic", "Actor-Critic - Policy-based narrative generation")
+    ("actor-critic", "Actor-Critic - Policy-based narrative generation"),
+    ("dimensional-critic", "Dimensional Critic - Multi-dimensional narrative analysis"),
+    ("selective-critic", "Selective Critic - Context-aware actor selection"),
+    ("optimizing-critic", "Optimizing Critic - Direct narrative optimization")
 ]
 
 # Group models by provider for UI
@@ -75,29 +78,41 @@ class ChatController:
             
     async def new_game(self):
         try:
-            adapter = self.adapter_rv.get()
-            await self.chat.clear_messages()
-            
-            welcome_message = {
-                "content": """Welcome to the Interactive Narrative! 
-                Type your character's actions to see how the story unfolds.
-                Each response will become your new current scene, building the narrative.""",
-                "role": "assistant"
-            }
-            initial_scene = {
-                "content": self.input.current_scene(),
-                "role": "assistant"
-            }
-            
-            await self.chat.append_message(welcome_message)
-            await self.chat.append_message(initial_scene)
-            
-            adapter.create_initial_state(
-                plot=self.input.plot(),
-                current_scene=self.input.current_scene(),
-                chat_messages=[welcome_message, initial_scene],
-                scene_history=[]
-            )
+            with ui.Progress(min=0, max=3) as p:
+                p.set(value=0, message="Initializing new game...", 
+                      detail="Setting up adapter...")
+                
+                adapter = self.adapter_rv.get()
+                await self.chat.clear_messages()
+                
+                p.set(value=1, message="Creating welcome message...", 
+                      detail="Preparing initial scene...")
+                
+                welcome_message = {
+                    "content": """Welcome to the Interactive Narrative! 
+                    Type your character's actions to see how the story unfolds.
+                    Each response will become your new current scene, building the narrative.""",
+                    "role": "assistant"
+                }
+                initial_scene = {
+                    "content": self.input.current_scene(),
+                    "role": "assistant"
+                }
+                
+                await self.chat.append_message(welcome_message)
+                await self.chat.append_message(initial_scene)
+                
+                p.set(value=2, message="Creating initial state...", 
+                      detail="Setting up game environment...")
+                
+                adapter.create_initial_state(
+                    plot=self.input.plot(),
+                    current_scene=self.input.current_scene(),
+                    chat_messages=[welcome_message, initial_scene],
+                    scene_history=[]
+                )
+                
+                p.set(value=3, message="Game started successfully!")
             
             ui.notification_show("New game started successfully", type="message")
             
@@ -108,13 +123,22 @@ class ChatController:
             
     async def update_game(self):
         try:
-            adapter = self.adapter_rv.get()
-            if not adapter.current_state:
-                ui.notification_show("No active game to update. Please start a new game first.", type="warning")
-                return
+            with ui.Progress(min=0, max=2) as p:
+                p.set(value=0, message="Updating game state...", 
+                      detail="Retrieving adapter...")
                 
-            adapter.current_state.plot = self.input.plot()
-            adapter.current_state.current_scene = self.input.current_scene()
+                adapter = self.adapter_rv.get()
+                if not adapter.current_state:
+                    ui.notification_show("No active game to update. Please start a new game first.", type="warning")
+                    return
+                    
+                p.set(value=1, message="Applying updates...", 
+                      detail="Updating plot and scene...")
+                
+                adapter.current_state.plot = self.input.plot()
+                adapter.current_state.current_scene = self.input.current_scene()
+                
+                p.set(value=2, message="Game updated successfully!")
             
             ui.notification_show("Game settings updated successfully", type="message")
             
@@ -155,25 +179,39 @@ class ChatController:
             
     async def load_state(self, scenes_rv, rv):
         try:
-            adapter = self.adapter_rv.get()
-            selected_save = self.input.save_select()
-            if not selected_save:
-                return
+            with ui.Progress(min=0, max=4) as p:
+                p.set(value=0, message="Loading saved state...", 
+                      detail="Retrieving adapter...")
                 
-            state = adapter.load_state(os.path.join("saves", selected_save))
-            
-            ui.update_text_area("plot", value=state.plot)
-            ui.update_text_area("current_scene", value=state.current_scene)
-            scenes_rv.set(state.scene_history)
-            
-            # When loading a game, just load the saved messages without adding an initial scene
-            await self.chat.clear_messages()
-            for msg in state.chat_messages:
-                await self.chat.append_message(msg)
-            
-            if "original_vision" in state.metadata:
-                rv.set(state.metadata["original_vision"])
+                adapter = self.adapter_rv.get()
+                selected_save = self.input.save_select()
+                if not selected_save:
+                    return
                 
+                p.set(value=1, message="Loading state data...", 
+                      detail="Reading save file...")
+                    
+                state = adapter.load_state(os.path.join("saves", selected_save))
+                
+                p.set(value=2, message="Updating UI...", 
+                      detail="Applying loaded state...")
+                
+                ui.update_text_area("plot", value=state.plot)
+                ui.update_text_area("current_scene", value=state.current_scene)
+                scenes_rv.set(state.scene_history)
+                
+                p.set(value=3, message="Restoring chat history...", 
+                      detail="Loading messages...")
+                
+                await self.chat.clear_messages()
+                for msg in state.chat_messages:
+                    await self.chat.append_message(msg)
+                
+                if "original_vision" in state.metadata:
+                    rv.set(state.metadata["original_vision"])
+                    
+                p.set(value=4, message="State loaded successfully!")
+            
             ui.notification_show("State loaded successfully", type="message")
             
         except Exception as e:
@@ -183,33 +221,49 @@ class ChatController:
             
     async def regenerate_scene(self, scenes_rv, rv):
         try:
-            adapter = self.adapter_rv.get()
-            messages = [
-                {"content": msg["content"], "role": msg["role"]} 
-                for msg in self.chat.messages()[:-1]
-            ]
-            
-            config = self.get_model_info()
-            state = await adapter.regenerate_current_state(
-                chat_messages=messages,
-                max_scenes=int(self.input.max_history()),
-                workflow_config=config
-            )
-            
-            ui.update_text_area("current_scene", value=state.current_scene)
-            scenes_rv.set(state.scene_history)
-            
-            if "original_vision" in state.metadata:
-                rv.set(state.metadata["original_vision"])
+            with ui.Progress(min=0, max=4) as p:
+                p.set(value=0, message="Preparing scene regeneration...", 
+                      detail="Gathering messages...")
                 
-            await self.chat.clear_messages()
-            for msg in messages:
-                await self.chat.append_message(msg)
-            
-            await self.chat.append_message({
-                "content": state.current_scene,
-                "role": "assistant"
-            })
+                adapter = self.adapter_rv.get()
+                messages = [
+                    {"content": msg["content"], "role": msg["role"]} 
+                    for msg in self.chat.messages()[:-1]
+                ]
+                
+                p.set(value=1, message="Configuring workflow...", 
+                      detail="Setting up model parameters...")
+                
+                config = self.get_model_info()
+                
+                p.set(value=2, message="Regenerating scene...", 
+                      detail="Processing with language model...")
+                
+                state = await adapter.regenerate_current_state(
+                    chat_messages=messages,
+                    max_scenes=int(self.input.max_history()),
+                    workflow_config=config
+                )
+                
+                p.set(value=3, message="Updating interface...", 
+                      detail="Applying new scene...")
+                
+                ui.update_text_area("current_scene", value=state.current_scene)
+                scenes_rv.set(state.scene_history)
+                
+                if "original_vision" in state.metadata:
+                    rv.set(state.metadata["original_vision"])
+                    
+                await self.chat.clear_messages()
+                for msg in messages:
+                    await self.chat.append_message(msg)
+                
+                await self.chat.append_message({
+                    "content": state.current_scene,
+                    "role": "assistant"
+                })
+                
+                p.set(value=4, message="Scene regenerated successfully!")
             
             ui.notification_show("Scene regenerated successfully", type="message")
             
@@ -223,38 +277,53 @@ class ChatController:
             
     async def handle_user_action(self, scenes_rv, rv):
         try:
-            adapter = self.adapter_rv.get()
-            user_action = self.chat.user_input()
-            logger.info("Received user action: %s", user_action)
-            
-            current_history = scenes_rv.get()
-            current_history.append(self.input.current_scene())
-            scenes_rv.set(current_history)
-            logger.info("Updated scene history, current length: %d", len(current_history))
-            
-            messages = [
-                {"content": msg["content"], "role": msg["role"]} 
-                for msg in self.chat.messages()
-            ]
-            
-            config = self.get_model_info()
-            
-            state = await adapter.generate_next_state(
-                user_action=user_action,
-                chat_messages=messages,
-                max_scenes=int(self.input.max_history()),
-                workflow_config=config
-            )
-            
-            ui.update_text_area("current_scene", value=state.current_scene)
-            
-            if "original_vision" in state.metadata:
-                rv.set(state.metadata["original_vision"])
-            
-            await self.chat.append_message({
-                "content": state.current_scene,
-                "role": "assistant"
-            })
+            with ui.Progress(min=0, max=4) as p:
+                p.set(value=0, message="Processing user action...", 
+                      detail="Initializing response...")
+                
+                adapter = self.adapter_rv.get()
+                user_action = self.chat.user_input()
+                logger.info("Received user action: %s", user_action)
+                
+                p.set(value=1, message="Updating scene history...", 
+                      detail="Recording current scene...")
+                
+                current_history = scenes_rv.get()
+                current_history.append(self.input.current_scene())
+                scenes_rv.set(current_history)
+                logger.info("Updated scene history, current length: %d", len(current_history))
+                
+                p.set(value=2, message="Generating response...", 
+                      detail="Processing with language model...")
+                
+                messages = [
+                    {"content": msg["content"], "role": msg["role"]} 
+                    for msg in self.chat.messages()
+                ]
+                
+                config = self.get_model_info()
+                
+                state = await adapter.generate_next_state(
+                    user_action=user_action,
+                    chat_messages=messages,
+                    max_scenes=int(self.input.max_history()),
+                    workflow_config=config
+                )
+                
+                p.set(value=3, message="Updating interface...", 
+                      detail="Applying new scene...")
+                
+                ui.update_text_area("current_scene", value=state.current_scene)
+                
+                if "original_vision" in state.metadata:
+                    rv.set(state.metadata["original_vision"])
+                
+                await self.chat.append_message({
+                    "content": state.current_scene,
+                    "role": "assistant"
+                })
+                
+                p.set(value=4, message="Response generated successfully!")
                 
         except Exception as e:
             error_msg = f"Error in chat handler: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
@@ -264,111 +333,139 @@ class ChatController:
                 "role": "assistant"
             })
 
-# Define the UI
+# Define the UI with improved styling and layout
 app_ui = ui.page_fillable(
-    ui.panel_title("Interactive Narrative Chat"),
+    ui.tags.style("""
+        .nav-tabs { margin-bottom: 20px; }
+        .card { margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .btn { margin-bottom: 10px; }
+        .well { background-color: #f8f9fa; padding: 15px; border-radius: 4px; }
+    """),
+    ui.div(
+        ui.h2("Interactive Narrative Chat"),
+        style="margin-bottom: 20px;"
+    ),
     ui.navset_tab(
         ui.nav_panel(
             "Story Settings",
-            ui.input_select(
-                "workflow_type",
-                "Select Narrative Engine:",
-                choices=dict(WORKFLOW_TYPES)
-            ),
-            ui.input_select(
-                "model_provider",
-                "Select Provider:",
-                choices=list(MODELS_BY_PROVIDER.keys())
-            ),
-            ui.input_select(
-                "model_select",
-                "Select Language Model:",
-                choices=[]  # Will be populated based on provider selection
-            ),
-            ui.input_text_area(
-                id="plot",
-                label="Story World/Plot:",
-                height="100px",
-                value="""The city-state of Kal-shalà stands in the shadow of the ancient Nameless Emperor's throne. Here, magic and technology merge – cybernetic skyscrapers rise beside the Emperor's Palace-Temple, all turning with the Gearwheel of Fate.
+            ui.layout_sidebar(
+                ui.sidebar(
+                    ui.card(
+                        ui.h4("Model Configuration"),
+                        ui.input_select(
+                            "workflow_type",
+                            "Narrative Engine:",
+                            choices=dict(WORKFLOW_TYPES),
+                            width="100%"
+                        ),
+                        ui.input_select(
+                            "model_provider",
+                            "Provider:",
+                            choices=list(MODELS_BY_PROVIDER.keys()),
+                            width="100%"
+                        ),
+                        ui.input_select(
+                            "model_select",
+                            "Language Model:",
+                            choices=[],
+                            width="100%"
+                        ),
+                        ui.input_numeric(
+                            "max_history",
+                            "Maximum Scene Memory:",
+                            value=20,
+                            min=1,
+                            max=40,
+                            step=1,
+                            width="100%"
+                        ),
+                    ),
+                    width=300
+                ),
+                ui.card(
+                    ui.h4("Story Configuration"),
+                    ui.input_text_area(
+                        id="plot",
+                        label="Story World/Plot:",
+                        height="200px",
+                        width="100%",
+                        value="""The city-state of Kal-shalà stands in the shadow of the ancient Nameless Emperor's throne. Here, magic and technology merge – cybernetic skyscrapers rise beside the Emperor's Palace-Temple, all turning with the Gearwheel of Fate.
 The streets hold both old and new. The Ninnuei artifacts and Rusty Cauldron relics share space with AI programs and augmented citizens. In the hyper-district, holographic ads light the night, while beneath the streets, the Spirit Network carries encrypted data through the city's foundations.
 The ruling Dynasty, descended from the Emperor's Court, governs through a mix of ancient rites and modern methods. Among the citizens walk street urchins who shape the city's destiny, cyborg oracles reading futures in holograms, technomancers coding spells, and scholars piecing together forgotten histories.
 Children play with digital ghosts of ancient beasts while rogue AIs take the forms of old monsters. The bazaars glow under Spirit Lanterns, memory streams hold generations of knowledge, and the old riverfront mirrors it all. In Kal-shalà, past and future blur – a city where digital gods walk alongside ancient ones, and magic flows through circuits as easily as air."""
-            ),
-            ui.input_text_area(
-                id="current_scene",
-                label="Current Scene:",
-                height="100px",
-                value="""Tales of Unfathomable Power:
+                    ),
+                    ui.input_text_area(
+                        id="current_scene",
+                        label="Current Scene:",
+                        height="200px",
+                        width="100%",
+                        value="""Tales of Unfathomable Power:
 
 Tale 2: The Kal-Shalà of men
 
-That night, a cold wind blew through the high beams in a forgotten skyscraper in the Old Financial District of the city. Abandoned for years, it had become a hub for lowlifes and a refuge for the destitute. Across the abandoned frame many tiny tents struggled against the cold and the winds. Inside one of them a couple argued, rising the volume of their voices bit by bit. Outside seated a young kid, looking absentmindedly at the distant city lights. There, covered by the blue haze the atmosphere draws on distant things rose the old, titanic, Temple, with all the buildings of the Government and its Protectorate latched to it like remoras or bloodsucking leeches. “Our Emperor,” the kid thought, Nowadays people disesteemed the old Emperor inside the Temple, calling it no more than an old archeological legacy from a distant time. Seldom anyone, even those that still had faith in the Vedanta, thought the ancient, unmoving Emperor was in any way still alive, but not his dad. “Epochs go by,” he had said to him, “cities crumble. The heavens change. But the Emperor remains living.” This had caused him a profound impression. Many years before, when he was still a little child, his father took him to see Him. One could still enter to the Temple at that time. He would forever remember the arid wind that blew through his face, as if conjured from nothing. The city had stopped being a desert many, many million years ago, when the continents were still joined as one, as his teachers had taught to him, and now was a humid place near the immense Ocean. And he remembered the old Emperor seated there, in an incredibly ancient, seemingly fragile throne of bones that seemed to cry, not from pain, but from pure sadness. And the light that shone on His head, holy and eternal. And he would forever remember his face. A face warm and distant, like an old father, looking at him. “Is... is he looking at me Dad?” He said to his father, and his father smiled “Yes, he sees all of Us.”
+That night, a cold wind blew through the high beams in a forgotten skyscraper in the Old Financial District of the city. Abandoned for years, it had become a hub for lowlifes and a refuge for the destitute. Across the abandoned frame many tiny tents struggled against the cold and the winds. Inside one of them a couple argued, rising the volume of their voices bit by bit. Outside seated a young kid, looking absentmindedly at the distant city lights. There, covered by the blue haze the atmosphere draws on distant things rose the old, titanic, Temple, with all the buildings of the Government and its Protectorate latched to it like remoras or bloodsucking leeches. "Our Emperor," the kid thought, Nowadays people disesteemed the old Emperor inside the Temple, calling it no more than an old archeological legacy from a distant time. Seldom anyone, even those that still had faith in the Vedanta, thought the ancient, unmoving Emperor was in any way still alive, but not his dad. "Epochs go by," he had said to him, "cities crumble. The heavens change. But the Emperor remains living." This had caused him a profound impression. Many years before, when he was still a little child, his father took him to see Him. One could still enter to the Temple at that time. He would forever remember the arid wind that blew through his face, as if conjured from nothing. The city had stopped being a desert many, many million years ago, when the continents were still joined as one, as his teachers had taught to him, and now was a humid place near the immense Ocean. And he remembered the old Emperor seated there, in an incredibly ancient, seemingly fragile throne of bones that seemed to cry, not from pain, but from pure sadness. And the light that shone on His head, holy and eternal. And he would forever remember his face. A face warm and distant, like an old father, looking at him. "Is... is he looking at me Dad?" He said to his father, and his father smiled "Yes, he sees all of Us."
 
 Dad was part of an increasingly radical group of Ninnuei fundamentalists. They argued these last millennia the pride of Man led to a stagnant society, where wealth and power was concentrated in the hands of the old nobility and the ever-putrid Party, its Protectorate and its Government. Forgetting about the Emperor and its old Visirs, prophets of old had made humanity morally rancid, and life unjust. Mom argued that he just blamed his own failures on external factors. That he did not think how we were poor, and he was weak. That we lived on a tent on the beams of an abandoned building.
 
 In one moment, she said something the kid could not pretend not to hear
 
-“I don’t know why I married you! You are a failure!”
+"I don't know why I married you! You are a failure!"
 
 Then silence came. Only the winds and the distant rumour of the city could be heard.
 
-“I’m. I’m so sorry. I didn’t mean it.” Said the woman. Then the rustling of cloth could be heard as a young man with a dirty, unkempt beard and long, curly hair left the tent. The young kid recognized his own absentminded face in the face of his father. “Hi son. I... I’ll be back later, OK?” “Y... yes dad,” and for no reason he thought he needed to ask, “Want me to come with you?” His dad looked at him, confusion in his eyes, and doubted a second. “No, I’ll be fine. Take care of your mother, yes?” “Sure thing, dad.” “Well, bye.” “Bye... dad”
+"I'm. I'm so sorry. I didn't mean it." Said the woman. Then the rustling of cloth could be heard as a young man with a dirty, unkempt beard and long, curly hair left the tent. The young kid recognized his own absentminded face in the face of his father. "Hi son. I... I'll be back later, OK?" "Y... yes dad," and for no reason he thought he needed to ask, "Want me to come with you?" His dad looked at him, confusion in his eyes, and doubted a second. "No, I'll be fine. Take care of your mother, yes?" "Sure thing, dad." "Well, bye." "Bye... dad"
 
 Soon his father disappeared in the shadows of the buildings. A couple of seconds after he was out of sight, his mother left the tent.
 
-“Hey, Ji, have you seen your father?”
+"Hey, Ji, have you seen your father?"
 
 The kid looked at her with vacant eyes, and extended a finger.
 
-“He went down, I think.”
+"He went down, I think."
 
-“Didn’t he say where he was going?”
+"Didn't he say where he was going?"
 
 He shook his head negatively and ignored his mother, looking instead at the Temple far away. Various blimps, ships and flying constructs flew though the skies, and its distant lights drew lines in the immensity"""
-            ),
-            ui.input_numeric(
-                "max_history",
-                "Maximum Scene Pairs to Remember:",
-                value=20,
-                min=1,
-                max=40,
-                step=1,
-            ),
-            ui.row(
-                ui.column(6, 
-                    ui.input_action_button(
-                        "new_game",
-                        "New Game",
-                        width="100%",
-                        class_="btn-primary"
-                    )
+                    ),
+                    ui.row(
+                        ui.column(6, 
+                            ui.input_action_button(
+                                "new_game",
+                                "New Game",
+                                width="100%",
+                                class_="btn-primary"
+                            )
+                        ),
+                        ui.column(6,
+                            ui.input_action_button(
+                                "update_game",
+                                "Update Game",
+                                width="100%",
+                                class_="btn-info"
+                            )
+                        )
+                    ),
                 ),
-                ui.column(6,
-                    ui.input_action_button(
-                        "update_game",
-                        "Update Game",
-                        width="100%",
-                        class_="btn-info"
-                    )
+                ui.card(
+                    ui.h4("How to Use"),
+                    ui.markdown("""
+                    1. Select your preferred model provider and model
+                    2. Set your story world and plot
+                    3. Click "New Game" to start fresh or "Update Game" to apply changes
+                    4. Switch to the Chat tab
+                    5. Type your character's actions
+                    6. Watch as the story evolves - each response becomes the new current scene
+                    """)
                 )
-            ),
-            ui.hr(),
-            ui.markdown("""
-            ### How to Use
-            1. Select your preferred model provider and model
-            2. Set your story world and plot
-            3. Click "New Game" to start fresh or "Update Game" to apply changes
-            4. Switch to the Chat tab
-            5. Type your character's actions
-            6. Watch as the story evolves - each response becomes the new current scene
-            """)
+            )
         ),
         ui.nav_panel(
             "Chat",
             ui.layout_sidebar(
                 ui.sidebar(
                     ui.card(
-                        ui.card_header("Save Management"),
+                        ui.h4("Save Management"),
                         ui.input_action_button(
                             "save_state",
                             "Save Current State",
@@ -395,33 +492,43 @@ He shook his head negatively and ignored his mother, looking instead at the Temp
                         )
                     ),
                     ui.card(
-                        ui.card_header("Save Information"),
+                        ui.h4("Save Information"),
                         ui.output_ui("save_info", fill=True)
                     ),
-                    width=400
+                    width=350
                 ),
-                ui.chat_ui("chat", placeholder="Enter your character's action...")
+                ui.chat_ui(
+                    "chat",
+                    placeholder="Enter your character's action...",
+                    height="calc(100vh - 100px)"
+                )
             )
         ),
         ui.nav_panel(
             "Story Elements",
-            ui.output_text_verbatim("last_plan"),
-            ui.markdown("""
-            ### About Story Elements
-            This tab shows the potential story elements that could naturally emerge 
-            from the current scene. These elements guide the narrative responses 
-            but aren't strictly followed, allowing for natural story development.
-            """)
+            ui.card(
+                ui.h4("Potential Story Elements"),
+                ui.output_text_verbatim("last_plan"),
+                ui.markdown("""
+                ### About Story Elements
+                This tab shows the potential story elements that could naturally emerge 
+                from the current scene. These elements guide the narrative responses 
+                but aren't strictly followed, allowing for natural story development.
+                """)
+            )
         ),
         ui.nav_panel(
             "Scene History",
-            ui.output_text_verbatim("scene_history"),
-            ui.markdown("""
-            ### About Scene History
-            This tab shows the chronological progression of scenes that are being 
-            used to inform the narrative responses. Each entry represents a scene 
-            that contributes to the story's continuity.
-            """)
+            ui.card(
+                ui.h4("Scene Progression"),
+                ui.output_text_verbatim("scene_history"),
+                ui.markdown("""
+                ### About Scene History
+                This tab shows the chronological progression of scenes that are being 
+                used to inform the narrative responses. Each entry represents a scene 
+                that contributes to the story's continuity.
+                """)
+            )
         ),
         selected="Chat"
     ),
