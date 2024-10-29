@@ -8,6 +8,7 @@ from llama_index.core.llms.llm import LLM
 from llama_index.llms.openai import OpenAI
 from llama_index.llms.ollama import Ollama
 from llama_index.llms.anthropic import Anthropic
+from database.mongo_client import MongoClient
 
 logger = logging.getLogger('save_metadata_adapter')
 
@@ -17,18 +18,21 @@ class SaveMetadata:
     overall_summary: str
     latest_summary: str
     timestamp: str
+    save_id: Optional[str] = None
 
     def to_dict(self) -> Dict:
-        return {
+        data = {
             "story_name": self.story_name,
             "overall_summary": self.overall_summary,
             "latest_summary": self.latest_summary,
             "timestamp": self.timestamp
         }
+        return data
 
 class SaveMetadataAdapter:
-    def __init__(self, save_dir: str = "saves"):
+    def __init__(self, db_client: MongoClient, save_dir: str = "saves"):
         self.save_dir = save_dir
+        self.db_client = db_client
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         self._llm: Optional[LLM] = None
@@ -37,7 +41,7 @@ class SaveMetadataAdapter:
         """Initialize LLM based on provider and model configuration."""
         if self._llm is None:
             provider = config.get("provider", "openai")
-            model = config.get("model", "gpt-4o-mini")
+            model = config.get("model", "gpt-4-mini")
             
             logger.info(f"Initializing LLM with provider: {provider}, model: {model}")
             
@@ -156,9 +160,16 @@ class SaveMetadataAdapter:
             ])
         return "\n".join(formatted)
 
-    def save_metadata(self, save_path: str, metadata: SaveMetadata):
-        """Save metadata to a companion file."""
+    async def save_metadata(self, save_path: str, metadata: SaveMetadata):
+        """Save metadata to both file system and MongoDB."""
         try:
+            # Save to MongoDB
+            metadata_dict = metadata.to_dict()
+            metadata_dict['save_path'] = save_path
+            save_id = await self.db_client.save_metadata(metadata_dict)
+            metadata.save_id = save_id
+
+            # Save to file system
             metadata_path = self._get_metadata_path(save_path)
             with open(metadata_path, 'w') as f:
                 json.dump(metadata.to_dict(), f, indent=2)
@@ -167,14 +178,22 @@ class SaveMetadataAdapter:
             logger.error(f"Failed to save metadata: {str(e)}")
             raise
 
-    def load_metadata(self, save_path: str) -> Optional[SaveMetadata]:
-        """Load metadata from a companion file."""
+    async def load_metadata(self, save_id: str) -> Optional[SaveMetadata]:
+        """Load metadata from MongoDB."""
         try:
-            metadata_path = self._get_metadata_path(save_path)
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    data = json.load(f)
-                return SaveMetadata(**data)
+            mongo_data = await self.db_client.load_metadata(save_id)
+            if mongo_data:
+                # Extract metadata fields from root level
+                metadata_fields = {
+                    'story_name': mongo_data.get('story_name'),
+                    'overall_summary': mongo_data.get('overall_summary'),
+                    'latest_summary': mongo_data.get('latest_summary'),
+                    'timestamp': mongo_data.get('timestamp'),
+                    'save_id': str(mongo_data['_id'])
+                }
+                # Only create metadata if all required fields are present
+                if all(metadata_fields.values()):
+                    return SaveMetadata(**metadata_fields)
             return None
         except Exception as e:
             logger.error(f"Failed to load metadata: {str(e)}")
@@ -185,14 +204,16 @@ class SaveMetadataAdapter:
         base, _ = os.path.splitext(save_path)
         return f"{base}_metadata.json"
 
-    def format_save_display(self, save_path: str) -> str:
+    async def format_save_display(self, save_id: str) -> str:
         """Format save information for display in UI."""
         try:
-            metadata = self.load_metadata(save_path)
+            metadata = await self.load_metadata(save_id)
             if metadata:
-                return (f"{os.path.basename(save_path)} - {metadata.story_name}\n"
-                       f"Last updated: {metadata.timestamp}")
-            return os.path.basename(save_path)
+                return (f"Save ID: {save_id}\n"
+                       f"Story: {metadata.story_name}\n"
+                       f"Last updated: {metadata.timestamp}\n\n"
+                       f"Latest events: {metadata.latest_summary}")
+            return f"Save ID: {save_id}"
         except Exception as e:
             logger.error(f"Failed to format save display: {str(e)}")
-            return os.path.basename(save_path)
+            return f"Save ID: {save_id}"

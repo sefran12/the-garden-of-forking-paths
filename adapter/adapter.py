@@ -1,8 +1,7 @@
 import json
-import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass
 import logging
 from engine.plan_adapt_workflow import NarrativeWorkflow
 from engine.actor_critic_workflow import ActorCriticWorkflow
@@ -10,6 +9,7 @@ from engine.dimensional_critic_actor_engine import DimensionalCriticActorWorkflo
 from engine.selective_critic_actor_engine import SelectiveCriticActorWorkflow
 from engine.optimizing_critic_actor_engine import OptimizingCriticActorWorkflow
 from .save_metadata_adapter import SaveMetadataAdapter, SaveMetadata
+from database.mongo_client import MongoClient
 
 logger = logging.getLogger('workflow_adapter')
 
@@ -70,25 +70,16 @@ class WorkflowAdapter:
         "optimizing-critic": OptimizingCriticActorWorkflow
     }
 
-    def __init__(self, save_dir: str = "saves"):
-        self.save_dir = save_dir
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
+    def __init__(self, mongo_client: MongoClient):
         self.current_state: Optional[StoryState] = None
-        self.current_save_path: Optional[str] = None
-        self.metadata_adapter = SaveMetadataAdapter(save_dir)
-        logger.info("WorkflowAdapter initialized with save directory: %s", save_dir)
+        self.current_save_id: Optional[str] = None
+        self.metadata_adapter = SaveMetadataAdapter(mongo_client)
+        logger.info("WorkflowAdapter initialized with MongoDB client")
 
     def _get_workflow_class(self, config: Dict[str, Any]) -> Any:
         """Get the appropriate workflow class based on config."""
         workflow_type = config.get("workflow_type", "plan-adapt")
         return self.WORKFLOW_TYPES.get(workflow_type, NarrativeWorkflow)
-
-    def _generate_save_path(self) -> str:
-        """Generate a unique save file path with timestamp."""
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        return os.path.join(self.save_dir, f"story_state_{timestamp}.json")
 
     def _extract_narrative_pairs(self, chat_messages: List[Dict[str, str]], max_scenes: int) -> Tuple[List[str], List[str]]:
         """
@@ -117,9 +108,9 @@ class WorkflowAdapter:
 
     async def save_state(self, state: Optional[StoryState] = None, workflow_config: Optional[Dict[str, Any]] = None) -> str:
         """
-        Save the current or provided story state to disk.
-        If the state is a continuation of the current save, it will overwrite it.
-        Otherwise, it creates a new save file.
+        Save the current or provided story state to MongoDB.
+        If the state is a continuation of the current save, it will update it.
+        Otherwise, it creates a new save document.
         """
         state = state or self.current_state
         if not state:
@@ -133,81 +124,65 @@ class WorkflowAdapter:
                 workflow_config=workflow_config
             )
 
-            # Determine if this is a continuation of current save
-            is_continuation = False
-            if self.current_save_path and os.path.exists(self.current_save_path):
-                try:
-                    with open(self.current_save_path, 'r') as f:
-                        previous_state = StoryState(**json.load(f))
-                    is_continuation = state.is_continuation_of(previous_state)
-                except Exception as e:
-                    logger.warning(f"Failed to check continuation status: {str(e)}")
-                    is_continuation = False
+            # Combine state and metadata
+            save_data = {**state.to_dict(), **save_metadata.to_dict()}
 
-            # Use existing path for continuation, generate new one otherwise
-            save_path = self.current_save_path if is_continuation else self._generate_save_path()
-            
-            # Convert state to serializable dictionary
-            state_dict = state.to_dict()
-            
-            with open(save_path, 'w') as f:
-                json.dump(state_dict, f, indent=2)
+            if self.current_save_id:
+                # Update existing save
+                await self.metadata_adapter.db_client.update_metadata(self.current_save_id, save_data)
+                save_id = self.current_save_id
+                logger.info(f"State updated successfully with ID: {save_id}")
+            else:
+                # Create new save
+                save_id = await self.metadata_adapter.db_client.save_metadata(save_data)
+                self.current_save_id = save_id
+                logger.info(f"New state saved successfully with ID: {save_id}")
 
-            # Save metadata
-            self.metadata_adapter.save_metadata(save_path, save_metadata)
-                
-            # Update current save path
-            self.current_save_path = save_path
-            
-            action = "updated" if is_continuation else "created"
-            logger.info(f"State {action} successfully at: {save_path}")
-            return save_path
-            
+            return save_id
+
         except Exception as e:
             logger.error("Failed to save state: %s", str(e))
             raise
 
-    def load_state(self, file_path: str) -> StoryState:
-        """Load a story state from disk."""
+    async def load_state(self, save_id: str) -> StoryState:
+        """Load a story state from MongoDB."""
         try:
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-            state = StoryState(**data)
+            data = await self.metadata_adapter.db_client.load_metadata(save_id)
+            if not data:
+                raise ValueError(f"No state found with ID: {save_id}")
+
+            # Remove MongoDB _id field before creating StoryState
+            if '_id' in data:
+                del data['_id']
+
+            state = StoryState(
+                plot=data["plot"],
+                current_scene=data["current_scene"],
+                scene_history=data["scene_history"],
+                chat_messages=data["chat_messages"],
+                timestamp=data["timestamp"],
+                metadata=data.get("metadata", {})  # Use get() with default empty dict
+            )
             self.current_state = state
-            self.current_save_path = file_path
-            logger.info("State loaded successfully from: %s", file_path)
+            self.current_save_id = save_id
+            logger.info(f"State loaded successfully from ID: {save_id}")
             return state
         except Exception as e:
-            logger.error("Failed to load state: %s", str(e))
+            logger.error(f"Failed to load state: {str(e)}")
             raise
 
-    def list_saves(self) -> List[Dict[str, str]]:
-        """List all available save files with their metadata."""
+    async def list_saves(self) -> List[Dict[str, Any]]:
+        """List all available saves with their metadata."""
         try:
-            saves = []
-            for f in os.listdir(self.save_dir):
-                # Skip metadata files and only process main save files
-                if f.startswith("story_state_") and f.endswith(".json") and not f.endswith("_metadata.json"):
-                    save_path = os.path.join(self.save_dir, f)
-                    display_text = self.metadata_adapter.format_save_display(save_path)
-                    # Extract timestamp from filename for sorting
-                    timestamp = f.replace("story_state_", "").replace(".json", "")
-                    saves.append({
-                        "path": f,
-                        "display": display_text,
-                        "timestamp": timestamp
-                    })
-            # Sort by timestamp
-            saves.sort(key=lambda x: x["timestamp"], reverse=True)  # Most recent first
-            # Return only the path and display fields
-            return [{"path": save["path"], "display": save["display"]} for save in saves]
+            saves = await self.metadata_adapter.db_client.list_saves()
+            return [{"id": str(save["_id"]), "name": save["story_name"], "timestamp": save["timestamp"]} for save in saves]
         except Exception as e:
-            logger.error("Failed to list saves: %s", str(e))
+            logger.error(f"Failed to list saves: {str(e)}")
             raise
 
-    def rollback_to_state(self, file_path: str) -> StoryState:
+    async def rollback_to_state(self, save_id: str) -> StoryState:
         """Roll back to a previous story state."""
-        return self.load_state(file_path)
+        return await self.load_state(save_id)
 
     async def generate_next_state(self, 
                                 user_action: str, 

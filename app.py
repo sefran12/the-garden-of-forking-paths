@@ -1,10 +1,13 @@
 import os
 import logging
 import traceback
+import httpx
 from shiny import App, ui, reactive, render
 from app_utils import load_dotenv
 from adapter.adapter import WorkflowAdapter
 from ui import app_ui, MODELS_BY_PROVIDER
+from database.mongo_client import MongoClient
+from llama_index.llms.together import TogetherLLM
 
 # Configure logging
 logging.basicConfig(
@@ -14,8 +17,29 @@ logging.basicConfig(
 logger = logging.getLogger('narrative_app')
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 logger.info("Environment variables loaded")
+
+# Initialize MongoDB client
+mongo_client = MongoClient()
+logger.info("MongoDB client initialized")
+
+async def fetch_together_models():
+    """Fetch available models from Together API"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get("https://api.together.xyz/v1/models",
+                                      headers={"Authorization": f"Bearer {os.getenv('TOGETHER_API_KEY')}"})
+            response.raise_for_status()
+            models = response.json()
+            # Filter for chat models and create (id, display_name) tuples
+            chat_models = [(model["id"], model.get("display_name", model["id"])) 
+                          for model in models 
+                          if "chat" in model["id"].lower()]
+            return chat_models
+    except Exception as e:
+        logger.error(f"Failed to fetch Together models: {str(e)}")
+        return []
 
 class ChatController:
     def __init__(self, input, chat, adapter_rv):
@@ -30,11 +54,11 @@ class ChatController:
             "workflow_type": self.input.workflow_type()
         }
     
-    def update_save_list(self):
+    async def update_save_list(self):
         """Update the save file choices in the UI"""
         adapter = self.adapter_rv.get()
-        saves = adapter.list_saves()
-        choices = {save["path"]: save["display"] for save in saves}
+        saves = await adapter.list_saves()
+        choices = {save["id"]: save["name"] for save in saves}
         ui.update_select("save_select", choices=choices)
             
     async def new_game(self):
@@ -122,12 +146,12 @@ class ChatController:
                       detail="Creating story name and summaries...")
                 
                 config = self.get_model_info()
-                save_path = await adapter.save_state(workflow_config=config)
+                save_id = await adapter.save_state(workflow_config=config)
                 
                 p.set(value=2, message="Finalizing save...", 
                       detail="Updating save list...")
                 
-                self.update_save_list()
+                await self.update_save_list()
                 
                 p.set(value=3, message="Save complete!")
             
@@ -152,7 +176,7 @@ class ChatController:
                 p.set(value=1, message="Loading state data...", 
                       detail="Reading save file...")
                     
-                state = adapter.load_state(os.path.join("saves", selected_save))
+                state = await adapter.load_state(selected_save)
                 
                 p.set(value=2, message="Updating UI...", 
                       detail="Applying loaded state...")
@@ -189,7 +213,7 @@ class ChatController:
                 adapter = self.adapter_rv.get()
                 messages = [
                     {"content": msg["content"], "role": msg["role"]} 
-                    for msg in self.chat.messages()[:-1]
+                    for msg in self.chat.messages()
                 ]
                 
                 p.set(value=1, message="Configuring workflow...", 
@@ -216,7 +240,7 @@ class ChatController:
                     rv.set(state.metadata["original_vision"])
                     
                 await self.chat.clear_messages()
-                for msg in messages:
+                for msg in messages[:-1]:  # Exclude the last message (old scene)
                     await self.chat.append_message(msg)
                 
                 await self.chat.append_message({
@@ -299,7 +323,7 @@ def server(input, output, session):
     
     # Create reactive values
     adapter_rv = reactive.Value()
-    adapter_rv.set(WorkflowAdapter())
+    adapter_rv.set(WorkflowAdapter(mongo_client))  # Pass mongo_client to WorkflowAdapter
     logger.info("Created reactive workflow adapter")
     
     rv = reactive.Value()
@@ -327,9 +351,13 @@ def server(input, output, session):
     
     # Reactive effects
     @reactive.Effect
-    def _():
+    async def _():
         provider = input.model_provider()
-        if provider in MODELS_BY_PROVIDER:
+        if provider == "Together":
+            # Fetch Together models dynamically
+            models = await fetch_together_models()
+            ui.update_select("model_select", choices=dict(models))
+        elif provider in MODELS_BY_PROVIDER:
             choices = MODELS_BY_PROVIDER[provider]
             ui.update_select("model_select", choices=dict(choices))
     
@@ -353,10 +381,6 @@ def server(input, output, session):
             async def _():
                 await chat.append_message(initial_scene)
             logger.info("Initialized story state")
-    
-    @reactive.Effect
-    def _():
-        controller.update_save_list()
     
     @reactive.Effect
     @reactive.event(input.new_game)
@@ -404,14 +428,14 @@ def server(input, output, session):
     
     @output
     @render.ui
-    def save_info():
+    async def save_info():
         """Display information about the currently selected save."""
         selected_save = input.save_select()
         if not selected_save:
             return ui.markdown("No save selected")
             
         adapter = adapter_rv.get()
-        metadata = adapter.metadata_adapter.load_metadata(os.path.join("saves", selected_save))
+        metadata = await adapter.metadata_adapter.load_metadata(selected_save)
         
         if metadata:
             return ui.TagList(
@@ -434,6 +458,11 @@ def server(input, output, session):
     @chat.on_user_submit
     async def _():
         await controller.handle_user_action(scenes_rv, rv)
+
+    # Update save list on app start
+    @reactive.Effect
+    async def _():
+        await controller.update_save_list()
 
 # Create and return the app
 logger.info("Creating Shiny app")

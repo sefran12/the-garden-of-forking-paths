@@ -13,6 +13,7 @@ from llama_index.core.workflow import (
 from llama_index.llms.openai import OpenAI
 from llama_index.llms.ollama import Ollama
 from llama_index.llms.anthropic import Anthropic
+from llama_index.llms.together import TogetherLLM
 from llama_index.core.llms.llm import LLM
 
 logging.basicConfig(
@@ -65,6 +66,8 @@ class SelectiveCriticActorWorkflow(Workflow):
                     cls._llm = OpenAI(model=model, temperature=0.8)
                 elif provider == "anthropic":
                     cls._llm = Anthropic(model=model, temperature=0.8)
+                elif provider == "together":
+                    cls._llm = TogetherLLM(model=model, temperature=0.8)
                 else:
                     raise ValueError(f"Unsupported provider: {provider}")
             except Exception as e:

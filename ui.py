@@ -26,7 +26,15 @@ AVAILABLE_MODELS = [
     {"name": "claude-3-5-sonnet-20241022", "provider": "anthropic", "size": "N/A"},
     {"name": "claude-3-opus-20240229", "provider": "anthropic", "size": "N/A"},
     {"name": "claude-3-sonnet-20240229", "provider": "anthropic", "size": "N/A"},
-    {"name": "claude-3-haiku-20240307", "provider": "anthropic", "size": "N/A"}
+    {"name": "claude-3-haiku-20240307", "provider": "anthropic", "size": "N/A"},
+
+    # Together Models
+    {"name": "Qwen/Qwen2.5-7B-Instruct-Turbo", "provider": "together", "size": "N/A"},
+    {"name": "Qwen/Qwen2.5-72B-Instruct-Turbo", "provider": "together", "size": "N/A"},
+    {"name": "google/gemma-2-27b-it", "provider": "together", "size": "N/A"},
+    {"name": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "provider": "together", "size": "N/A"},
+    {"name": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", "provider": "together", "size": "N/A"},
+    {"name": "microsoft/WizardLM-2-8x22B", "provider": "together", "size": "N/A"}
 ]
 
 # Available workflow types
