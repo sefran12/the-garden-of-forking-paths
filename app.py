@@ -5,6 +5,8 @@ from shiny import App, ui, reactive, render
 from app_utils import load_dotenv
 from adapter.adapter import WorkflowAdapter
 from ui import app_ui, MODELS_BY_PROVIDER
+from pymongo import MongoClient
+from bson.objectid import ObjectId
 
 # Configure logging
 logging.basicConfig(
@@ -14,8 +16,15 @@ logging.basicConfig(
 logger = logging.getLogger('narrative_app')
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 logger.info("Environment variables loaded")
+
+# MongoDB connection
+mongo_client = MongoClient(os.getenv('MONGODB_URI'))
+db = mongo_client[os.getenv('MONGODB_DB_NAME')]
+saves_collection = db[os.getenv('MONGODB_SAVES_COLLECTION')]
+metadata_collection = db[os.getenv('MONGODB_METADATA_COLLECTION')]
+logger.info("MongoDB connection established")
 
 class ChatController:
     def __init__(self, input, chat, adapter_rv):
@@ -122,7 +131,11 @@ class ChatController:
                       detail="Creating story name and summaries...")
                 
                 config = self.get_model_info()
-                save_path = await adapter.save_state(workflow_config=config)
+                
+                p.set(value=1, message="Saving state...", 
+                      detail="Saving to file and MongoDB...")
+                
+                save_path, save_id = await adapter.save_state(workflow_config=config)
                 
                 p.set(value=2, message="Finalizing save...", 
                       detail="Updating save list...")
@@ -131,7 +144,7 @@ class ChatController:
                 
                 p.set(value=3, message="Save complete!")
             
-            ui.notification_show(f"State saved successfully", type="message")
+            ui.notification_show(f"State saved successfully to file: {save_path} and MongoDB ID: {save_id}", type="message")
             
         except Exception as e:
             error_msg = f"Failed to save state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
@@ -150,9 +163,9 @@ class ChatController:
                     return
                 
                 p.set(value=1, message="Loading state data...", 
-                      detail="Reading save file...")
+                      detail="Reading from storage...")
                     
-                state = adapter.load_state(os.path.join("saves", selected_save))
+                state = adapter.load_state(selected_save)
                 
                 p.set(value=2, message="Updating UI...", 
                       detail="Applying loaded state...")
@@ -173,7 +186,8 @@ class ChatController:
                     
                 p.set(value=4, message="State loaded successfully!")
             
-            ui.notification_show("State loaded successfully", type="message")
+            source = "local file" if adapter.current_save_path else "MongoDB"
+            ui.notification_show(f"State loaded successfully from {source}", type="message")
             
         except Exception as e:
             error_msg = f"Failed to load state: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
@@ -411,19 +425,31 @@ def server(input, output, session):
             return ui.markdown("No save selected")
             
         adapter = adapter_rv.get()
-        metadata = adapter.metadata_adapter.load_metadata(os.path.join("saves", selected_save))
-        
-        if metadata:
+        try:
+            state = adapter.load_state(selected_save)
+            
+            # Try to get metadata from MongoDB if it's a MongoDB save
+            metadata = state.metadata
+            if adapter.current_save_id:
+                mongo_metadata = metadata_collection.find_one({"save_id": adapter.current_save_id})
+                if mongo_metadata:
+                    # Remove MongoDB-specific fields
+                    mongo_metadata.pop('_id', None)
+                    mongo_metadata.pop('save_id', None)
+                    metadata.update(mongo_metadata)
+            
             return ui.TagList(
-                ui.markdown(f"### {metadata.story_name}"),
+                ui.markdown(f"### {metadata.get('story_name', 'Untitled')}"),
                 ui.hr(),
                 ui.markdown("#### Overall Summary"),
-                ui.panel_well(metadata.overall_summary),
+                ui.panel_well(metadata.get('overall_summary', 'No summary available')),
                 ui.markdown("#### Latest Events"),
-                ui.panel_well(metadata.latest_summary),
-                ui.markdown(f"*Last Updated: {metadata.timestamp}*")
+                ui.panel_well(metadata.get('latest_summary', 'No recent events')),
+                ui.markdown(f"*Last Updated: {state.timestamp}*")
             )
-        return ui.markdown("No metadata available for this save")
+        except Exception as e:
+            logger.error(f"Failed to load save info: {str(e)}")
+            return ui.markdown("Error loading save information")
     
     # Transform assistant responses to handle markdown
     @chat.transform_assistant_response

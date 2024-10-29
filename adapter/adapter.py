@@ -10,8 +10,20 @@ from engine.dimensional_critic_actor_engine import DimensionalCriticActorWorkflo
 from engine.selective_critic_actor_engine import SelectiveCriticActorWorkflow
 from engine.optimizing_critic_actor_engine import OptimizingCriticActorWorkflow
 from .save_metadata_adapter import SaveMetadataAdapter, SaveMetadata
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 
 logger = logging.getLogger('workflow_adapter')
+
+# MongoDB connection
+mongo_client = MongoClient(os.getenv('MONGODB_URI'))
+db = mongo_client[os.getenv('MONGODB_DB_NAME')]
+saves_collection = db[os.getenv('MONGODB_SAVES_COLLECTION')]
+metadata_collection = db[os.getenv('MONGODB_METADATA_COLLECTION')]
 
 @dataclass
 class StoryState:
@@ -77,6 +89,7 @@ class WorkflowAdapter:
         
         self.current_state: Optional[StoryState] = None
         self.current_save_path: Optional[str] = None
+        self.current_save_id: Optional[str] = None
         self.metadata_adapter = SaveMetadataAdapter(save_dir)
         logger.info("WorkflowAdapter initialized with save directory: %s", save_dir)
 
@@ -115,11 +128,11 @@ class WorkflowAdapter:
         actions, scenes = zip(*pairs) if pairs else ([], [])
         return list(actions), list(scenes)
 
-    async def save_state(self, state: Optional[StoryState] = None, workflow_config: Optional[Dict[str, Any]] = None) -> str:
+    async def save_state(self, state: Optional[StoryState] = None, workflow_config: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
         """
-        Save the current or provided story state to disk.
-        If the state is a continuation of the current save, it will overwrite it.
-        Otherwise, it creates a new save file.
+        Save the current or provided story state to both disk and MongoDB.
+        If this is a continuation of a loaded save, it will update that save.
+        If this is a regeneration, it will create a new save.
         """
         state = state or self.current_state
         if not state:
@@ -133,64 +146,129 @@ class WorkflowAdapter:
                 workflow_config=workflow_config
             )
 
-            # Determine if this is a continuation of current save
-            is_continuation = False
-            if self.current_save_path and os.path.exists(self.current_save_path):
-                try:
-                    with open(self.current_save_path, 'r') as f:
-                        previous_state = StoryState(**json.load(f))
-                    is_continuation = state.is_continuation_of(previous_state)
-                except Exception as e:
-                    logger.warning(f"Failed to check continuation status: {str(e)}")
-                    is_continuation = False
+            # Check if this is a regeneration
+            is_regeneration = state.metadata.get("regenerated", False)
 
-            # Use existing path for continuation, generate new one otherwise
-            save_path = self.current_save_path if is_continuation else self._generate_save_path()
+            # If this is a regeneration, always create a new save
+            # Otherwise, use the current save path/id if they exist
+            if is_regeneration:
+                save_path = self._generate_save_path()
+                save_id = None
+            else:
+                save_path = self.current_save_path or self._generate_save_path()
+                save_id = self.current_save_id
             
             # Convert state to serializable dictionary
             state_dict = state.to_dict()
             
+            # Save to local file
             with open(save_path, 'w') as f:
                 json.dump(state_dict, f, indent=2)
 
-            # Save metadata
+            # Save metadata to separate file
             self.metadata_adapter.save_metadata(save_path, save_metadata)
-                
-            # Update current save path
+
+            # Save to MongoDB - separate collections for state and metadata
+            if save_id:  # Update existing documents
+                saves_collection.update_one(
+                    {"_id": ObjectId(save_id)},
+                    {"$set": state_dict}
+                )
+                metadata_collection.update_one(
+                    {"save_id": save_id},
+                    {"$set": save_metadata.to_dict()}
+                )
+            else:  # Insert new documents
+                result = saves_collection.insert_one(state_dict)
+                save_id = str(result.inserted_id)
+                metadata_dict = save_metadata.to_dict()
+                metadata_dict['save_id'] = save_id
+                metadata_collection.insert_one(metadata_dict)
+
+            # Update current save path and id
             self.current_save_path = save_path
+            self.current_save_id = save_id
             
-            action = "updated" if is_continuation else "created"
-            logger.info(f"State {action} successfully at: {save_path}")
-            return save_path
+            action = "created new" if is_regeneration else "updated"
+            logger.info(f"State {action} successfully at: {save_path} and MongoDB ID: {save_id}")
+            return save_path, save_id
             
         except Exception as e:
             logger.error("Failed to save state: %s", str(e))
             raise
 
-    def load_state(self, file_path: str) -> StoryState:
-        """Load a story state from disk."""
+    def load_state(self, identifier: str) -> StoryState:
+        """
+        Load a story state from disk or MongoDB.
+        If not found in one, it will try the other.
+        """
+        local_state = None
+        mongo_state = None
+        metadata = None
+
+        # Try to load from local file
+        local_path = os.path.join(self.save_dir, identifier)
+        if os.path.exists(local_path):
+            try:
+                with open(local_path, 'r') as f:
+                    local_state = StoryState(**json.load(f))
+                # Load local metadata
+                metadata = self.metadata_adapter.load_metadata(local_path)
+                if metadata:
+                    local_state.metadata.update(metadata.to_dict())
+                logger.info(f"State loaded from local file: {local_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load state from local file: {str(e)}")
+
+        # Try to load from MongoDB
         try:
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-            state = StoryState(**data)
-            self.current_state = state
-            self.current_save_path = file_path
-            logger.info("State loaded successfully from: %s", file_path)
-            return state
+            # Try to parse as ObjectId first
+            try:
+                obj_id = ObjectId(identifier)
+                mongo_doc = saves_collection.find_one({"_id": obj_id})
+                if mongo_doc:
+                    # Convert _id to string
+                    mongo_doc['_id'] = str(mongo_doc['_id'])
+                    mongo_state = StoryState(**mongo_doc)
+                    # Load metadata from separate collection
+                    metadata_doc = metadata_collection.find_one({"save_id": str(obj_id)})
+                    if metadata_doc:
+                        mongo_state.metadata.update(metadata_doc)
+                    logger.info(f"State loaded from MongoDB with ID: {identifier}")
+            except Exception as e:
+                logger.warning(f"Failed to parse MongoDB ID: {str(e)}")
         except Exception as e:
-            logger.error("Failed to load state: %s", str(e))
-            raise
+            logger.warning(f"Failed to load state from MongoDB: {str(e)}")
+
+        # Determine which state to use
+        if local_state and mongo_state:
+            # Use the most recent one
+            state = local_state if local_state.timestamp >= mongo_state.timestamp else mongo_state
+        elif local_state:
+            state = local_state
+        elif mongo_state:
+            state = mongo_state
+        else:
+            raise ValueError(f"Failed to load state with identifier: {identifier}")
+
+        self.current_state = state
+        self.current_save_path = local_path if local_state else None
+        self.current_save_id = identifier if mongo_state else None
+
+        return state
 
     def list_saves(self) -> List[Dict[str, str]]:
         """List all available save files with their metadata."""
         try:
             saves = []
             for f in os.listdir(self.save_dir):
-                # Skip metadata files and only process main save files
-                if f.startswith("story_state_") and f.endswith(".json") and not f.endswith("_metadata.json"):
+                # Skip metadata files
+                if f.endswith("_metadata.json"):
+                    continue
+                    
+                if f.startswith("story_state_") and f.endswith(".json"):
                     save_path = os.path.join(self.save_dir, f)
                     display_text = self.metadata_adapter.format_save_display(save_path)
-                    # Extract timestamp from filename for sorting
                     timestamp = f.replace("story_state_", "").replace(".json", "")
                     saves.append({
                         "path": f,
@@ -199,15 +277,14 @@ class WorkflowAdapter:
                     })
             # Sort by timestamp
             saves.sort(key=lambda x: x["timestamp"], reverse=True)  # Most recent first
-            # Return only the path and display fields
             return [{"path": save["path"], "display": save["display"]} for save in saves]
         except Exception as e:
             logger.error("Failed to list saves: %s", str(e))
             raise
 
-    def rollback_to_state(self, file_path: str) -> StoryState:
+    def rollback_to_state(self, identifier: str) -> StoryState:
         """Roll back to a previous story state."""
-        return self.load_state(file_path)
+        return self.load_state(identifier)
 
     async def generate_next_state(self, 
                                 user_action: str, 
@@ -327,7 +404,7 @@ class WorkflowAdapter:
                     "original_vision": result["original_vision"],
                     "user_action": user_action,
                     "model_config": workflow_config,
-                    "regenerated": True
+                    "regenerated": True  # Mark this as a regeneration
                 }
             )
             
