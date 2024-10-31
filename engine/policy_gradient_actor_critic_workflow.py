@@ -48,7 +48,7 @@ class PolicyGradientActorCriticWorkflow(Workflow):
 
     def __init__(self, *args, config: Dict[str, Any] = None, **kwargs):
         super().__init__(*args, **kwargs)
-        ActorCriticWorkflow._config = config or {}
+        PolicyGradientActorCriticWorkflow._config = config or {}
         logger.info("Initializing ActorCriticWorkflow with config: %s", self._config)
         
     @classmethod

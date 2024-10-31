@@ -2,11 +2,19 @@ import os
 import logging
 import traceback
 from shiny import App, ui, reactive, render
-from app_utils import load_dotenv
+from app_utils import generate_workflow_visualization
 from adapter.adapter import WorkflowAdapter
-from ui import app_ui, MODELS_BY_PROVIDER
+from ui import app_ui, MODELS_BY_PROVIDER, get_workflow_class
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+from engine.actor_critic_workflow import ActorCriticWorkflow
+from engine.plan_adapt_workflow import NarrativeWorkflow
+from engine.policy_gradient_actor_critic_workflow import PolicyGradientActorCriticWorkflow
+from engine.timescales_aware_actor_critic_workflow import TimescalesAwareActorCriticWorkflow
+from engine.dimensional_critic_actor_engine import DimensionalCriticActorWorkflow
+from engine.selective_critic_actor_engine import SelectiveCriticActorWorkflow
+from engine.optimizing_critic_actor_engine import OptimizingCriticActorWorkflow
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(
@@ -416,6 +424,41 @@ def server(input, output, session):
         
         return "\n".join(formatted_history)
     
+    @output
+    @render.ui
+    def workflow_viz():
+        """Render workflow visualization"""
+        workflow_type = input.workflow_type()
+        workflow_class = get_workflow_class(workflow_type)
+        if workflow_class:
+            try:
+                html_content = generate_workflow_visualization(workflow_class())
+                # Create a div to contain the iframe with proper styling
+                return ui.div(
+                    ui.HTML(
+                        f'''
+                        <iframe 
+                            class="workflow-viz" 
+                            style="width: 100%; height: 600px; border: none; overflow: hidden;"
+                            srcdoc="{html_content}"
+                            frameborder="0"
+                        ></iframe>
+                        '''
+                    ),
+                    style="width: 100%; height: 600px; overflow: hidden;"
+                )
+            except Exception as e:
+                logger.error(f"Failed to generate workflow visualization: {str(e)}")
+                return ui.div(
+                    ui.markdown(f"Error generating visualization: {str(e)}"),
+                    style="color: red; padding: 10px;"
+                )
+        return ui.div(
+            ui.markdown("No workflow visualization available"),
+            style="padding: 10px;"
+        )
+
+
     @output
     @render.ui
     def save_info():

@@ -1,4 +1,12 @@
 from shiny import ui
+from app_utils import generate_workflow_visualization
+from engine.actor_critic_workflow import ActorCriticWorkflow
+from engine.plan_adapt_workflow import NarrativeWorkflow
+from engine.policy_gradient_actor_critic_workflow import PolicyGradientActorCriticWorkflow
+from engine.timescales_aware_actor_critic_workflow import TimescalesAwareActorCriticWorkflow
+from engine.dimensional_critic_actor_engine import DimensionalCriticActorWorkflow
+from engine.selective_critic_actor_engine import SelectiveCriticActorWorkflow
+from engine.optimizing_critic_actor_engine import OptimizingCriticActorWorkflow
 
 # Available models configuration
 AVAILABLE_MODELS = [
@@ -29,14 +37,14 @@ AVAILABLE_MODELS = [
     {"name": "claude-3-haiku-20240307", "provider": "anthropic", "size": "N/A"}
 ]
 
-# Available workflow types
+# Available workflow types with their corresponding classes
 WORKFLOW_TYPES = [
-    ("plan-adapt", "Plan & Adapt - Classic planning with adaptation"),
-    ("actor-critic", "Actor-Critic - Policy-based narrative generation"),
-    ("policy-gradient-actor-critic", "Policy Gradient A2C - Gradient update, Policy-based narrative generation"),
-    ("dimensional-critic", "Dimensional Critic - Multi-dimensional narrative analysis"),
-    ("selective-critic", "Selective Critic - Context-aware actor selection"),
-    ("optimizing-critic", "Optimizing Critic - Direct narrative optimization")
+    ("plan-adapt", "Plan & Adapt - Classic planning with adaptation", NarrativeWorkflow),
+    ("actor-critic", "Actor-Critic - Policy-based narrative generation", ActorCriticWorkflow),
+    ("policy-gradient-actor-critic", "Policy Gradient A2C - Gradient update, Policy-based narrative generation", PolicyGradientActorCriticWorkflow),
+    ("dimensional-critic", "Dimensional Critic - Multi-dimensional narrative analysis", DimensionalCriticActorWorkflow),
+    ("selective-critic", "Selective Critic - Context-aware actor selection", SelectiveCriticActorWorkflow),
+    ("optimizing-critic", "Optimizing Critic - Direct narrative optimization", OptimizingCriticActorWorkflow)
 ]
 
 # Group models by provider for UI
@@ -48,6 +56,23 @@ for model in AVAILABLE_MODELS:
     display_name = f"{model['name']} ({model['size']})" if model['size'] != "N/A" else model['name']
     MODELS_BY_PROVIDER[provider].append((model['name'], display_name))
 
+def get_workflow_class(workflow_type):
+    """Get the workflow class based on the selected type"""
+    for wf_type, _, wf_class in WORKFLOW_TYPES:
+        if wf_type == workflow_type:
+            return wf_class
+    return None
+
+def generate_workflow_viz(workflow_type):
+    """Generate workflow visualization HTML"""
+    workflow_class = get_workflow_class(workflow_type)
+    if workflow_class:
+        try:
+            return generate_workflow_visualization(workflow_class())
+        except Exception as e:
+            return f"<p>Error generating visualization: {str(e)}</p>"
+    return "<p>No workflow visualization available</p>"
+
 # Define the UI with improved styling and layout
 app_ui = ui.page_fillable(
     ui.tags.style("""
@@ -56,6 +81,7 @@ app_ui = ui.page_fillable(
         .form-group { margin-bottom: 15px; }
         .btn { margin-bottom: 10px; }
         .well { background-color: #f8f9fa; padding: 15px; border-radius: 4px; }
+        .workflow-viz { width: 100%; height: 600px; border: none; }
     """),
     ui.div(
         ui.h2("Interactive Narrative Chat"),
@@ -71,7 +97,7 @@ app_ui = ui.page_fillable(
                         ui.input_select(
                             "workflow_type",
                             "Narrative Engine:",
-                            choices=dict(WORKFLOW_TYPES),
+                            choices=dict((wf_type, desc) for wf_type, desc, _ in WORKFLOW_TYPES),
                             width="100%"
                         ),
                         ui.input_select(
@@ -97,6 +123,11 @@ app_ui = ui.page_fillable(
                         ),
                     ),
                     width=300
+                ),
+                ui.card(
+                    ui.h4("Workflow Visualization"),
+                    ui.output_ui("workflow_viz"),
+                    full_screen=True
                 ),
                 ui.card(
                     ui.h4("Story Configuration"),
