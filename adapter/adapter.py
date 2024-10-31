@@ -33,6 +33,7 @@ class StoryState:
     chat_messages: List[Dict[str, str]]
     timestamp: str
     metadata: Dict[str, Any]
+    story_name: Optional[str] = None
 
     def to_dict(self) -> Dict:
         """Convert state to a serializable dictionary."""
@@ -42,7 +43,8 @@ class StoryState:
             "scene_history": self.scene_history,
             "chat_messages": self.chat_messages,
             "timestamp": self.timestamp,
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            "story_name": self.story_name
         }
     
     def is_continuation_of(self, other: 'StoryState') -> bool:
@@ -211,7 +213,10 @@ class WorkflowAdapter:
         if os.path.exists(local_path):
             try:
                 with open(local_path, 'r') as f:
-                    local_state = StoryState(**json.load(f))
+                    state_dict = json.load(f)
+                    # Remove '_id' if present (from MongoDB saves)
+                    state_dict.pop('_id', None)
+                    local_state = StoryState(**state_dict)
                 # Load local metadata
                 metadata = self.metadata_adapter.load_metadata(local_path)
                 if metadata:
@@ -227,11 +232,12 @@ class WorkflowAdapter:
                 obj_id = ObjectId(identifier)
                 mongo_doc = saves_collection.find_one({"_id": obj_id})
                 if mongo_doc:
-                    # Convert _id to string
+                    # Convert _id to string and remove it from the document
                     mongo_doc['_id'] = str(mongo_doc['_id'])
+                    mongo_id = mongo_doc.pop('_id')
                     mongo_state = StoryState(**mongo_doc)
                     # Load metadata from separate collection
-                    metadata_doc = metadata_collection.find_one({"save_id": str(obj_id)})
+                    metadata_doc = metadata_collection.find_one({"save_id": mongo_id})
                     if metadata_doc:
                         mongo_state.metadata.update(metadata_doc)
                     logger.info(f"State loaded from MongoDB with ID: {identifier}")
@@ -258,26 +264,57 @@ class WorkflowAdapter:
         return state
 
     def list_saves(self) -> List[Dict[str, str]]:
-        """List all available save files with their metadata."""
+        """List all available save files with their metadata from both local directory and MongoDB."""
         try:
-            saves = []
+            saves = {}
+            
+            # List local saves
             for f in os.listdir(self.save_dir):
-                # Skip metadata files
-                if f.endswith("_metadata.json"):
-                    continue
-                    
                 if f.startswith("story_state_") and f.endswith(".json"):
                     save_path = os.path.join(self.save_dir, f)
-                    display_text = self.metadata_adapter.format_save_display(save_path)
                     timestamp = f.replace("story_state_", "").replace(".json", "")
-                    saves.append({
+                    display_text = self.metadata_adapter.format_save_display(save_path)
+                    saves[timestamp] = {
                         "path": f,
                         "display": display_text,
-                        "timestamp": timestamp
-                    })
+                        "timestamp": timestamp,
+                        "source": "local"
+                    }
+
+            # List MongoDB saves
+            mongo_saves = saves_collection.find({}, {"_id": 1, "timestamp": 1})
+            for save in mongo_saves:
+                timestamp = save["timestamp"]
+                mongo_id = str(save["_id"])
+                
+                if timestamp in saves:
+                    # Save exists in both local and MongoDB
+                    saves[timestamp]["source"] = "both"
+                    saves[timestamp]["mongo_id"] = mongo_id
+                else:
+                    # Save exists only in MongoDB
+                    metadata = metadata_collection.find_one({"save_id": mongo_id})
+                    display_text = f"MongoDB save from {timestamp}"
+                    if metadata:
+                        display_text = self.metadata_adapter.format_mongo_save_display(metadata)
+                    
+                    saves[timestamp] = {
+                        "mongo_id": mongo_id,
+                        "display": display_text,
+                        "timestamp": timestamp,
+                        "source": "mongo"
+                    }
+
             # Sort by timestamp
-            saves.sort(key=lambda x: x["timestamp"], reverse=True)  # Most recent first
-            return [{"path": save["path"], "display": save["display"]} for save in saves]
+            sorted_saves = sorted(saves.values(), key=lambda x: x["timestamp"], reverse=True)
+
+            # Format the final list
+            return [{
+                "id": save.get("path") or save.get("mongo_id"),
+                "display": save["display"],
+                "source": save["source"]
+            } for save in sorted_saves]
+
         except Exception as e:
             logger.error("Failed to list saves: %s", str(e))
             raise
@@ -336,7 +373,8 @@ class WorkflowAdapter:
                     "original_vision": result["original_vision"],
                     "user_action": user_action,
                     "model_config": workflow_config
-                }
+                },
+                story_name=self.current_state.story_name
             )
             
             self.current_state = new_state
@@ -405,7 +443,8 @@ class WorkflowAdapter:
                     "user_action": user_action,
                     "model_config": workflow_config,
                     "regenerated": True  # Mark this as a regeneration
-                }
+                },
+                story_name=self.current_state.story_name
             )
             
             self.current_state = new_state
@@ -428,7 +467,8 @@ class WorkflowAdapter:
             scene_history=scene_history or [],
             chat_messages=chat_messages,
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            metadata={"initial_state": True}
+            metadata={"initial_state": True},
+            story_name=None
         )
         self.current_state = state
         logger.info("Created initial state")

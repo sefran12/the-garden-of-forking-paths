@@ -43,7 +43,7 @@ class ChatController:
         """Update the save file choices in the UI"""
         adapter = self.adapter_rv.get()
         saves = adapter.list_saves()
-        choices = {save["path"]: save["display"] for save in saves}
+        choices = {save["id"]: save["display"] for save in saves}
         ui.update_select("save_select", choices=choices)
             
     async def new_game(self):

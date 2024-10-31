@@ -196,3 +196,13 @@ class SaveMetadataAdapter:
         except Exception as e:
             logger.error(f"Failed to format save display: {str(e)}")
             return os.path.basename(save_path)
+
+    def format_mongo_save_display(self, metadata: Dict[str, Any]) -> str:
+        """Format MongoDB save information for display in UI."""
+        try:
+            story_name = metadata.get("story_name", "Untitled")
+            timestamp = metadata.get("timestamp", "Unknown time")
+            return f"MongoDB Save - {story_name}\nLast updated: {timestamp}"
+        except Exception as e:
+            logger.error(f"Failed to format MongoDB save display: {str(e)}")
+            return "MongoDB Save (No details available)"

@@ -176,7 +176,8 @@ class OptimizingCriticActorWorkflow(Workflow):
             Critic's Analysis:
             {ev.analysis}
 
-            Write what happens next. Focus on:
+            Continue the story directly, focusing on:
+
             1. Clear, concrete sensory details (what is seen, heard, felt)
             2. Specific physical actions and reactions
             3. Observable changes in the environment or characters
@@ -184,6 +185,7 @@ class OptimizingCriticActorWorkflow(Workflow):
             5. Details that connect to established elements
 
             Important guidelines:
+            - Begin the narrative without any preamble or phrases like "Here's the next scene:"
             - Stay grounded in physical reality
             - Show events through direct observation
             - Keep descriptions precise and literal
@@ -191,17 +193,11 @@ class OptimizingCriticActorWorkflow(Workflow):
             - Maintain established pacing and complexity
             - Develop identified story needs
 
-            Example of good scene:
-            "The old terminal's screens flickered to life one by one, each displaying a different fragment of data. In the reflection of the nearest monitor, Sarah noticed a shadow move behind her."
-
-            Example of bad scene:
-            "The screens seemed to awaken like ancient spirits, their digital displays holding secrets untold. Sarah felt the weight of destiny as shadows danced with hidden meaning."
-
             Write a clear, direct scene focusing on what actually happens.
             """
             
             logger.info("Generating actor response")
-            response = await llm.acomplete(prompt)
+            response = await llm.acomplete(prompt, max_tokens=1024*4)
             logger.info("Successfully generated actor response")
             
             return ActorResponseEvent(
@@ -211,6 +207,7 @@ class OptimizingCriticActorWorkflow(Workflow):
         except Exception as e:
             logger.error("Error in actor_step: %s", str(e))
             raise
+
 
     @step
     async def format_response(
