@@ -58,13 +58,13 @@ class CriticResponseEvent(Event):
     narrative: str
     original_policy: str
 
-class TimescaleActorCriticWorkflow(Workflow):
+class TimescalesAwareActorCriticWorkflow(Workflow):
     _llm: Optional[LLM] = None
     _config: ClassVar[Dict[str, Any]] = {}
 
     def __init__(self, *args, config: Dict[str, Any] = None, **kwargs):
         super().__init__(*args, **kwargs)
-        TimescaleActorCriticWorkflow._config = config or {}
+        TimescalesAwareActorCriticWorkflow._config = config or {}
         logger.info("Initializing TimescaleActorCriticWorkflow with config: %s", self._config)
         
     @classmethod
