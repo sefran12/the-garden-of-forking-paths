@@ -13,6 +13,7 @@ AVAILABLE_MODELS = [
     # Ollama Models
     {"name": "mistral-nemo:12b", "provider": "ollama", "size": "7.1 GB"},
     {"name": "aya-expanse:8b-q6_K", "provider": "ollama", "size": "6.6 GB"},
+    {"name": "adi0adi/ollama_stheno-8b_v3.1_q6k", "provider": "ollama", "size": "6.6 GB"},
     {"name": "technobyte/arliai-rpmax-12b-v1.1:q4_k_m", "provider": "ollama", "size": "7.5 GB"},
     {"name": "michaelbui/nemomix-unleashed-12b:q4-k-m", "provider": "ollama", "size": "7.5 GB"},
     {"name": "jean-luc/tiger-gemma-9b-v3:q6_K", "provider": "ollama", "size": "7.6 GB"},
@@ -34,7 +35,7 @@ AVAILABLE_MODELS = [
     {"name": "claude-3-5-sonnet-20241022", "provider": "anthropic", "size": "N/A"},
     {"name": "claude-3-opus-20240229", "provider": "anthropic", "size": "N/A"},
     {"name": "claude-3-sonnet-20240229", "provider": "anthropic", "size": "N/A"},
-    {"name": "claude-3-haiku-20240307", "provider": "anthropic", "size": "N/A"}
+    {"name": "claude-3-5-haiku-20241022", "provider": "anthropic", "size": "N/A"}
 ]
 
 # Available workflow types with their corresponding classes

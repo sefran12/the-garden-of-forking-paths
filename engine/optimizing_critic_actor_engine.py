@@ -193,6 +193,12 @@ class OptimizingCriticActorWorkflow(Workflow):
             - Maintain established pacing and complexity
             - Develop identified story needs
 
+            Example of good scene:
+            "The old terminal's screens flickered to life one by one, each displaying a different fragment of data. In the reflection of the nearest monitor, Sarah noticed a shadow move behind her."
+
+            Example of bad scene:
+            "The screens seemed to awaken like ancient spirits, their digital displays holding secrets untold. Sarah felt the weight of destiny as shadows danced with hidden meaning."
+
             Write a clear, direct scene focusing on what actually happens.
             """
             
